@@ -1,0 +1,414 @@
+# -*-Mode:Tcl-*-
+#
+#  Copyright (c) 2012 Giampiero Salvi
+#
+# This is a plugin that enables running the HTK recognizer HVite online
+
+# from Niklas
+# configfile = "/NOBACKUP/niklasva/nst/nst_rec/work/refrec096-tmh/wordloop_test/config/julius.jconf"
+# hlist = "/NOBACKUP/niklasva/nst/dist/distv0.2/julius-MFCC_0_D_A-16kHz/tied.lis"
+# hmm = "/NOBACKUP/niklasva/nst/dist/distv0.2/julius-MFCC_0_D_A-16kHz/tied_64.mmf"
+# inputtype = "raw" #För wav-filer, mfc för mfcc
+# lm = "/NOBACKUP/niklasva/nst/dist/sample.lm"
+# dict = "/NOBACKUP/niklasva/nst/dist/sample.dict"
+# piece ="fil med lista av filer"
+#
+# julius -C $configfile -nosectioncheck -hlist $hlist  -input $inputtype -d $lm -v $dict -h $hmm -filelist $piece -fallback1pass -spsegment
+
+
+# Register plug-in with the callbacks we want to use.
+
+wsurf::RegisterPlugin ASR \
+    -description "This plug-in adds online speech recognition support.\
+   More information at http://speech.kth.se/asr/." \
+    -url "http://speech.kth.se/~giampi/" \
+    -addmenuentriesproc   asr::addMenuEntries \
+    -panecreatedproc      asr::paneCreated \
+    -panedeletedproc      asr::paneDeleted \
+    -propertiespageproc   asr::propertyPane \
+    -applypropertiesproc  asr::applyProperties \
+    -getconfigurationproc asr::getConfiguration \
+    -soundchangedproc     asr::soundChanged \
+    -before  transcription
+
+
+#    -redrawproc           asr::redraw \
+#    -getboundsproc        asr::getBounds \
+#    -cursormovedproc      asr::cursorMoved \
+
+
+# -----------------------------------------------------------------------------
+# Create own namespace in which to keep all procedures and variables, global,
+# widget-specific, or pane-specific.
+
+namespace eval asr {
+  variable Info
+
+  if [info exists ::wsurf::Info(CurrentPluginPath)] {
+    set dir [file dirname $::wsurf::Info(CurrentPluginPath)]
+  } else {
+    set dir [file dirname [info script]]
+  }
+
+  set Info(OptionTable) [list \
+		-asr:cfg         cfg        "$dir/asr/features.cfg" \
+		-asr:lat         lat        "$dir/asr/swdigloop.lat" \
+		-asr:mmf         mmf        "" \
+		-asr:dic         dic        "" \
+		-asr:lst         lst        "" \
+		-asr:extraargs   extraargs  "" \
+		-asr:inspen      inspen     0.0 \
+			   ]
+
+  set Info(tmpfile) [file join [util::tmpdir] asrtmp]
+  set Info(asrexe) "$dir/asr/julius-4.3.1"
+} 
+
+
+# -----------------------------------------------------------------------------
+# Add the entry "Speech Recognition" to the "Create Pane" popup-menu,
+# with the command asr::createAsr
+
+proc asr::addMenuEntries {w pane m hook x y} {
+  if {[string match create $hook]} {
+    $m.$hook add command -label "Speech Recognition" \
+	-command [namespace code [list createAsr $w $pane]]
+  }
+}
+
+
+# -----------------------------------------------------------------------------
+# This procedure is called when a new pane is created.
+# Note that we don't know at this point what will be rendered in this pane,
+# so we assume that this plug-in won't handle this pane and keep track of
+# that information in a variable. 
+
+proc asr::paneCreated {w pane} {
+ namespace eval [namespace current]::${pane} {
+  variable var
+ }
+ upvar [namespace current]::${pane}::var v
+ set v(drawAsr) 0
+}
+
+
+# -----------------------------------------------------------------------------
+# This procedure is called when a pane is deleted, allowing
+# the plug-in to clean-up resources used for the pane.
+# The procedure deletes the pane's local namespace, which contains all
+# variables allocated for the pane.
+
+proc asr::paneDeleted {w pane} {
+  namespace delete [namespace current]::${pane}
+}
+
+
+# Create a new pane and add graphics to it showing recognition results
+
+proc asr::createAsr {w pane} {
+  ::wsurf::trans::createTranscription $w $pane
+  #set pane [$w addPane -before $pane -height 20 -scrollheight 20 \
+  #    -unit "" -fillcolor lightyellow -framecolor blue]
+
+  # this is a hack to find the current pane because createTranscription does
+  # not return the value
+  set master [regsub {\.[^\.]*$} $pane ""]
+  set panelist [pack slaves $master]
+  set index -1
+  foreach p $panelist {
+      incr index
+      if [string equal $p $pane] {
+	  break
+      } 
+  }
+  set pane [lindex $panelist [expr $index-2]]
+  # end of the hack
+
+  upvar ::wsurf::trans::${pane}::var u
+  set u(format) "HTK"
+  set u(labext) "rec"
+
+  addAsrStuff $w $pane
+}
+
+
+# Compute and draw recognition info in a given pane.
+
+proc asr::addAsrStuff {w pane args} {
+ variable Info
+ upvar [namespace current]::${pane}::var v
+
+  file delete -force $Info(tmpfile).wav
+  file delete -force $Info(tmpfile).rec
+
+ foreach {option key default} $Info(OptionTable) {
+  set a($option) $default
+ }
+ array set a $args
+ foreach {option key default} $Info(OptionTable) {
+  set v($key) $a($option)
+ }
+ 
+ _computeAsr $w $pane
+ _drawAsr $w $pane
+}
+
+
+# Compute recognition info in a given pane.
+
+proc asr::_computeAsr {w pane} {
+  variable Info
+  upvar [namespace current]::${pane}::var v
+ 
+  set snd [$w cget -sound]
+  if {[$snd length] == 0} {
+    return
+  }
+  $w messageProc "Running recognizer..."
+  $snd write $Info(tmpfile).wav
+  if {[catch {exec HVite -C $v(cfg) -H $v(mmf) -w $v(lat) -p $v(inspen) -s 5.0 {*}$v(extraargs) $v(dic) $v(lst) $Info(tmpfile).wav} ret]} {
+
+    # User probably aborted this computation (or an error occurred)
+
+    if {$ret != ""} {
+      $w messageProc "$ret"
+      error "$ret"
+    }
+  } else {
+    $w messageProc "Done recognizing"
+  }
+  ::wsurf::trans::openTranscriptionFile $w $pane $Info(tmpfile).wav soundfile
+}
+
+
+# Draw voicing info in a given pane.
+
+proc asr::_drawAsr {w pane} {
+
+    ::wsurf::trans::redraw $w $pane
+  upvar [namespace current]::${pane}::var v
+#  upvar ::wsurf::trans::${pane}::var u
+
+#  $u(drawTranscription)
+
+  # set c [$pane canvas]
+  # set height [$pane cget -scrollheight]
+  # $c delete asr
+  # set i 0
+
+  # # Frame interval is 10ms, get corresponding delta-x
+
+  # set dx [$pane getCanvasX 0.01]
+
+  # foreach val $v(pitchList) {
+  #   if {$val == 0.0} {
+  #     set color $v(offColor)
+  #   } else {
+  #     set color $v(onColor)
+  #   }
+  #   $c create rectangle [expr {$i * $dx}] 0 [expr {($i + 1) * $dx}] $height \
+  # 	-fill $color -outline "" -tags [list asr]
+  #   incr i
+  # }
+  # $c lower asr
+  # $c create text 0 0 -text "This is a recognition plugin" -anchor nw
+
+  # We have now rendered plug-in specific stuff in this pane.
+  # Remember that this plug-in will handle this pane from now on.
+
+  set v(drawAsr) 1
+}
+
+
+# -----------------------------------------------------------------------------
+# This procedure is called whenever the widget needs to redraw all panes.
+# For example, when the user zooms.
+
+# proc asr::redraw {w pane} {
+#   upvar [namespace current]::${pane}::var v
+
+#   if {$v(drawAsr)} {
+#     _drawAsr $w $pane
+#   }
+# }
+
+
+# -----------------------------------------------------------------------------
+# This procedure is called whenever the widget needs to know the limits
+# of the information this plug-in shows in this particular pane.
+# Typically returns a list: start_time min_value end_time max_value
+
+# proc asr::getBounds {w pane} {
+#   upvar [namespace current]::${pane}::var v
+
+#   if {$v(drawAsr)} {
+#     set snd [$w cget -sound]
+#     list 0 0 [$snd length -unit seconds] 0
+#   } else {
+#     list
+#   }
+# }
+
+
+# -----------------------------------------------------------------------------
+# This procedure is called whenever the cursor is moved within the widget.
+
+# proc asr::cursorMoved {w pane time value} {
+#   upvar [namespace current]::${pane}::var v
+
+#   if {$v(drawAsr)} {
+#     set i [expr {int($time*100 + .5)}]
+#     set pitch [lindex $v(pitchList) $i]
+#     if {$pitch == ""} return
+#     if {$pitch != 0.0} {
+#       set str "voiced segment"
+#     } else {
+#       set str "unvoiced segment"
+#     }
+#     $w messageProc [format "HVite - %s %s" [$w formatTime $time] $str]
+#   }
+# }
+
+
+# -----------------------------------------------------------------------------
+# This procedure is called whenever the properties dialog is opened for
+# this pane. It adds the tab "Asr" and calls asr::drawAsrPage
+# to render the properties notebook-page.
+
+proc asr::propertyPane {w pane} {
+  upvar [namespace current]::${pane}::var v
+  
+  if {$pane==""} return
+  if {$v(drawAsr)} {
+    return [list "Asr" [namespace code drawAsrPage]]
+  }
+}
+
+
+# This procedure is called when the user clicks "OK" or "Apply" in the 
+# "Asr" notebook-page.
+
+proc asr::applyProperties {w pane} {
+  if {[string match *wavebar $pane]} return
+  variable Info
+  upvar [namespace current]::${pane}::var v
+
+  if {[info exists v(drawAsr)]} {
+    if {$v(drawAsr)} {
+      foreach {option var default} $Info(OptionTable) {
+	if {[string compare $v(t,$var) $v($var)] != 0} {
+	  set v($var) $v(t,$var)
+	  set doRedraw 1
+	}
+      }
+      if {[info exists doRedraw]} {
+        _computeAsr $w $pane
+        _drawAsr $w $pane
+	#$w _redrawPane $pane
+      }
+    }
+  }
+}
+
+proc asr::fileChooserEntry {w label var ext} {
+    set types "{ \
+	{{$label} {$ext} } \
+	{{All Files} * } \
+		 }"
+
+  pack [ttk::frame $w] -anchor w -ipady 2
+
+    label $w.l -text $label -anchor w -wi 15
+    entry $w.e -textvariable $var -wi 25
+    button $w.b -text Browse... -command [namespace code "set $var \[tk_getOpenFile -defaultextension $ext -filetypes $types\]"] 
+    
+    pack $w.l $w.e $w.b -side left -padx 3
+}
+
+# This procedure draws the properties notebook-page for the "Asr" tab.
+
+proc asr::drawAsrPage {w pane p} {
+  upvar [namespace current]::${pane}::var v
+
+  foreach f [winfo children $p] {
+    destroy $f
+  }
+
+  foreach var [list cfg lat mmf dic lst extraargs inspen] {
+    set v(t,$var) $v($var)
+  }
+
+  fileChooserEntry $p.f1 "Config File:" [namespace current]::${pane}::var(t,cfg) .cfg
+  fileChooserEntry $p.f2 "Lattice File:" [namespace current]::${pane}::var(t,lat) .lat
+  fileChooserEntry $p.f3 "Master Macro File:" [namespace current]::${pane}::var(t,mmf) .mmf
+  fileChooserEntry $p.f4 "Dictionary File:" [namespace current]::${pane}::var(t,dic) .dic
+  fileChooserEntry $p.f5 "Word List File:" [namespace current]::${pane}::var(t,lst) .lst
+    
+  pack [ttk::frame $p.f6] -anchor w -ipady 2
+  label $p.f6.l -text "Insertion Penalty" -anchor w -wi 15
+  entry $p.f6.e -textvariable [namespace current]::${pane}::var(t,inspen) -wi 10
+  pack $p.f6.l $p.f6.e -side left -padx 3
+
+  pack [ttk::frame $p.f7] -anchor w -ipady 2
+  label $p.f7.l -text "Extra Arguments" -anchor w -wi 15
+  entry $p.f7.e -textvariable [namespace current]::${pane}::var(t,extraargs) -wi 25
+  pack $p.f7.l $p.f7.e -side left -padx 3
+
+  pack [ttk::frame $p.f8] -anchor w -ipady 2
+  label $p.f8.l -text "Current Command:" -anchor w -wi 15
+  pack $p.f8.l -side left -padx 3
+  pack [ttk::frame $p.f9] -anchor w -ipady 2
+  text $p.f9.t -width 60 -height 4
+  $p.f9.t insert 1.0 "$asrexe -C $v(cfg) -H $v(mmf) -w $v(lat) -p $v(inspen) -s 5.0 $v(extraargs) $v(dic) $v(lst) file.wav" 
+  $p.f9.t configure -state disabled
+  pack $p.f9.t -side left -padx 3
+
+#  foreach var [list onColor offColor] {
+#    set v(t,$var) $v($var)
+#  }
+
+# colorPropItem $p.f1 "Voiced segment color:" 23 \
+#     [namespace current]::${pane}::var(t,onColor)
+# colorPropItem $p.f2 "Unvoiced segment color:" 23 \
+#     [namespace current]::${pane}::var(t,offColor)
+
+
+}
+
+
+# -----------------------------------------------------------------------------
+# This procedure returns the code needed to re-create this pane.
+
+proc asr::getConfiguration {w pane} {
+ variable Info
+ upvar [namespace current]::${pane}::var v
+ 
+ set result {}
+ if {$pane != "" && $v(drawAsr)} {
+  append result "\$widget asr::addAsrStuff \$pane"
+  
+  foreach {option key default} $Info(OptionTable) {
+   if {$v($key) != $default} {
+    append result " $option \"$v($key)\""
+   }
+  }
+ }
+ append result "\n"
+ 
+ return $result
+}
+
+
+# -----------------------------------------------------------------------------
+# This procedure is called whenever the sound of this widget has changed.
+# For example, after a record operation.
+
+proc asr::soundChanged {w flag} {
+ foreach pane [$w _getPanes] {
+  upvar [namespace current]::${pane}::var v
+  if {$v(drawAsr)} {
+   _computeAsr $w $pane
+   _drawAsr $w $pane
+  }
+ }
+}
