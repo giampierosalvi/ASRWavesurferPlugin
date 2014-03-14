@@ -3,8 +3,8 @@ Linux:
 sudo apt-get install julius
 - install wavesurfer (if you do not have it already) with
 sudo apt-get install wavesurfer
-- copy asr.plug into ~/wavesurfer/<version>/plugin/
-- copy the models files to ~/wavesurfer/<version>/plugin/asr
+- copy asr.plug into ~/wavesurfer/<version>/plugins/
+- copy the models files to ~/wavesurfer/<version>/plugins/asr
 
 Windows:
 

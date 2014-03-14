@@ -51,17 +51,19 @@ namespace eval asr {
   }
 
   set Info(OptionTable) [list \
-		-asr:cfg         cfg        "$dir/asr/features.cfg" \
+		-asr:cfg         cfg        "$dir/asr/sv/julius.jconf" \
 		-asr:lat         lat        "$dir/asr/swdigloop.lat" \
-		-asr:mmf         mmf        "" \
-		-asr:dic         dic        "" \
-		-asr:lst         lst        "" \
+		-asr:mmf         mmf        "$dir/asr/sv/hmmdefs" \
+		-asr:dic         dic        "$dir/asr/sv/sample.jdict" \
+		-asr:lst         lst        "$dir/asr/sv/tiedlist" \
+		-asr:lm          lm         "$dir/asr/sv/sample.lm" \
 		-asr:extraargs   extraargs  "" \
 		-asr:inspen      inspen     0.0 \
 			   ]
 
-  set Info(tmpfile) [file join [util::tmpdir] asrtmp]
-  set Info(asrexe) "$dir/asr/julius-4.3.1"
+    set Info(tmpfile) [file join [util::tmpdir] asrtmp.[pid]]
+  #set Info(asrexe) "$dir/asr/julius-4.3.1"
+  set Info(asrexe) "julius"
 } 
 
 
@@ -153,9 +155,63 @@ proc asr::addAsrStuff {w pane args} {
  _drawAsr $w $pane
 }
 
+proc lshift listVar {
+    upvar 1 $listVar l
+    set r [lindex $l 0]
+    set l [lreplace $l [set l 0] 0]
+    return $r
+}
+
+proc asr::getJuliusTranscription {juliusres level} {
+  # first extract relevant information
+  set lines [split $juliusres \n]
+  set len [llength $lines]
+  set idx 0
+  while {(![regexp "-- $level alignment --" [lindex $lines $idx]]) && ($idx<$len)} {
+    incr idx
+  }
+  if $idx==$len {
+    puts "error: beginning of $level transcrition not found"
+  }
+  # here we have found the beginning, skip the next two lines
+  incr idx 3
+  set idxstart $idx
+  while {(![regexp {re[-]computed AM score} [lindex $lines $idx]]) && ($idx<$len)} {
+    incr idx
+  }
+  if $idx==$len {
+    puts "error: end of word transcrition not found"
+  }
+  incr idx -1
+  set idxend $idx
+
+  return [join [lrange $lines $idxstart $idxend] \n]
+}
+
+# convert Julius to HTK format
+proc asr::juliusTransToHTK {transcription stripTriphones} {
+  variable Info
+  set transHTK ""
+    foreach line [split $transcription \n] {
+    if ![regexp {\[\s*([^\s]*)\s*([^\s]*)\s*\]\s*([^\s]*)\s*([^\s]*)} $line dummy start end score symbol] {
+      puts "format error: $line"
+      continue
+    }
+    if $start!=0 {
+      set start "${start}00000"
+    }
+    set end "${end}00000"
+    if $stripTriphones {
+      regsub {^.*\-} $symbol "" symbol
+      regsub {\+.*$} $symbol "" symbol
+    }
+    set transHTK "${transHTK}$start $end $symbol $score\n"
+  }
+  return $transHTK 
+}
+
 
 # Compute recognition info in a given pane.
-
 proc asr::_computeAsr {w pane} {
   variable Info
   upvar [namespace current]::${pane}::var v
@@ -166,17 +222,32 @@ proc asr::_computeAsr {w pane} {
   }
   $w messageProc "Running recognizer..."
   $snd write $Info(tmpfile).wav
-  if {[catch {exec HVite -C $v(cfg) -H $v(mmf) -w $v(lat) -p $v(inspen) -s 5.0 {*}$v(extraargs) $v(dic) $v(lst) $Info(tmpfile).wav} ret]} {
+  exec echo $Info(tmpfile).wav > $Info(tmpfile).lst
+# for debugging
+puts "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -spsegment -filelist $Info(tmpfile).lst"
+  if {[catch {exec $Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -spsegment -filelist $Info(tmpfile).lst} ret]} {
 
     # User probably aborted this computation (or an error occurred)
-
-    if {$ret != ""} {
+    if {![regexp {1 files processed} $ret]} {
       $w messageProc "$ret"
       error "$ret"
     }
   } else {
     $w messageProc "Done recognizing"
   }
+
+  # get word level transcription from $ret
+  set wordtrans [juliusTransToHTK [getJuliusTranscription $ret word] 0]
+  # save transcription to file
+  set fh [open $Info(tmpfile).rec w]
+  puts $fh $wordtrans
+  close $fh
+  # get phoneme level transcription from $ret
+  set phonetrans [juliusTransToHTK [getJuliusTranscription $ret phoneme] 0]
+  # save transcription to file
+  set fh [open $Info(tmpfile).phn w]
+  puts $fh $phonetrans
+  close $fh
   ::wsurf::trans::openTranscriptionFile $w $pane $Info(tmpfile).wav soundfile
 }
 
@@ -328,6 +399,7 @@ proc asr::fileChooserEntry {w label var ext} {
 # This procedure draws the properties notebook-page for the "Asr" tab.
 
 proc asr::drawAsrPage {w pane p} {
+  variable Info
   upvar [namespace current]::${pane}::var v
 
   foreach f [winfo children $p] {
@@ -359,7 +431,8 @@ proc asr::drawAsrPage {w pane p} {
   pack $p.f8.l -side left -padx 3
   pack [ttk::frame $p.f9] -anchor w -ipady 2
   text $p.f9.t -width 60 -height 4
-  $p.f9.t insert 1.0 "$asrexe -C $v(cfg) -H $v(mmf) -w $v(lat) -p $v(inspen) -s 5.0 $v(extraargs) $v(dic) $v(lst) file.wav" 
+  $p.f9.t insert 1.0 "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input stdin -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -spsegment < $Info(tmpfile).wav" 
+
   $p.f9.t configure -state disabled
   pack $p.f9.t -side left -padx 3
 
