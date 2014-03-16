@@ -1,8 +1,9 @@
 # -*-Mode:Tcl-*-
 #
-#  Copyright (c) 2012 Giampiero Salvi
+#  Copyright (c) 2012-2014 Giampiero Salvi
 #
-# This is a plugin that enables running the HTK recognizer HVite online
+# This is a plugin that allows to run the Julius recognizer embedded
+# in Wavesurfer
 
 # from Niklas
 # configfile = "/NOBACKUP/niklasva/nst/nst_rec/work/refrec096-tmh/wordloop_test/config/julius.jconf"
@@ -19,8 +20,17 @@
 # Register plug-in with the callbacks we want to use.
 
 wsurf::RegisterPlugin ASR \
-    -description "This plug-in adds online speech recognition support.\
-   More information at http://speech.kth.se/asr/." \
+  -description "This plug-in adds online speech recognition support.\
+  Right click on a pane and select \"Create Pane/Speech Recognition\".\
+  The plugin will create a transcription pane and present there the\
+  results of speech recognition. Right click and select Propeties to\
+  get access to the plugin configuration under the ASR tab.\
+  If you use this plugin for research, please refer to the article:\
+  \n\
+  Salvi, G., & Vanhainen, N. (2014). \"The WaveSurfer Automatic Speech\
+  Recognition Plugin\" in Proceedings of LREC. Reykjavik, Iceland.\
+  \n\
+  More information and updated versions of the plugin at http://speech.kth.se/asr/." \
     -url "http://speech.kth.se/~giampi/" \
     -addmenuentriesproc   asr::addMenuEntries \
     -panecreatedproc      asr::paneCreated \
@@ -28,11 +38,11 @@ wsurf::RegisterPlugin ASR \
     -propertiespageproc   asr::propertyPane \
     -applypropertiesproc  asr::applyProperties \
     -getconfigurationproc asr::getConfiguration \
+    -redrawproc           asr::redraw \
     -soundchangedproc     asr::soundChanged \
     -before  transcription
 
 
-#    -redrawproc           asr::redraw \
 #    -getboundsproc        asr::getBounds \
 #    -cursormovedproc      asr::cursorMoved \
 
@@ -50,20 +60,30 @@ namespace eval asr {
     set dir [file dirname [info script]]
   }
 
+  set availLangs [glob -directory [file join $dir asr] [file join * lang.conf]]
+  set Info(availableLanguages) {}
+  foreach langdir $availLangs {
+    lappend Info(availableLanguages) [lindex [file split $langdir] end-1]
+  }
+
   set Info(OptionTable) [list \
-		-asr:cfg         cfg        "$dir/asr/sv/julius.jconf" \
+		-asr:lang        lang       "Swedish" \
+		-asr:cfg         cfg        "$dir/asr/Swedish/julius.jconf" \
 		-asr:lat         lat        "$dir/asr/swdigloop.lat" \
-		-asr:mmf         mmf        "$dir/asr/sv/hmmdefs" \
-		-asr:dic         dic        "$dir/asr/sv/sample.jdict" \
-		-asr:lst         lst        "$dir/asr/sv/tiedlist" \
-		-asr:lm          lm         "$dir/asr/sv/sample.lm" \
+		-asr:mmf         mmf        "$dir/asr/Swedish/hmmdefs" \
+		-asr:dic         dic        "$dir/asr/Swedish/sample.jdict" \
+		-asr:lst         lst        "$dir/asr/Swedish/tiedlist" \
+		-asr:lm          lm         "$dir/asr/Swedish/sample.lm" \
 		-asr:extraargs   extraargs  "" \
 		-asr:inspen      inspen     0.0 \
 			   ]
 
-    set Info(tmpfile) [file join [util::tmpdir] asrtmp.[pid]]
-  #set Info(asrexe) "$dir/asr/julius-4.3.1"
-  set Info(asrexe) "julius"
+  set Info(tmpfile) [file join [util::tmpdir] asrtmp.[pid]]
+  set Info(asrexe) "$dir/asr/julius-4.2.3"
+  # the next should be read from julius.jconf
+  set Info(asr:samplingrate) 16000
+  set Info(asr:framerate) 100
+  #set Info(asrexe) "julius"
 } 
 
 
@@ -108,6 +128,9 @@ proc asr::paneDeleted {w pane} {
 # Create a new pane and add graphics to it showing recognition results
 
 proc asr::createAsr {w pane} {
+
+  puts "createAsr: entry pane=$pane"
+
   ::wsurf::trans::createTranscription $w $pane
   #set pane [$w addPane -before $pane -height 20 -scrollheight 20 \
   #    -unit "" -fillcolor lightyellow -framecolor blue]
@@ -125,9 +148,10 @@ proc asr::createAsr {w pane} {
   }
   set pane [lindex $panelist [expr $index-2]]
   # end of the hack
+  puts "createAsr: exit pane=$pane"
 
   upvar ::wsurf::trans::${pane}::var u
-  set u(format) "HTK"
+  set u(format) "Wavesurfer"
   set u(labext) "rec"
 
   addAsrStuff $w $pane
@@ -137,22 +161,22 @@ proc asr::createAsr {w pane} {
 # Compute and draw recognition info in a given pane.
 
 proc asr::addAsrStuff {w pane args} {
- variable Info
- upvar [namespace current]::${pane}::var v
-
+  variable Info
+  upvar [namespace current]::${pane}::var v
+  
   file delete -force $Info(tmpfile).wav
   file delete -force $Info(tmpfile).rec
-
- foreach {option key default} $Info(OptionTable) {
-  set a($option) $default
- }
- array set a $args
- foreach {option key default} $Info(OptionTable) {
-  set v($key) $a($option)
- }
- 
- _computeAsr $w $pane
- _drawAsr $w $pane
+  
+  foreach {option key default} $Info(OptionTable) {
+    set a($option) $default
+  }
+  array set a $args
+  foreach {option key default} $Info(OptionTable) {
+    set v($key) $a($option)
+  }
+  
+  _computeAsr $w $pane
+  _drawAsr $w $pane
 }
 
 proc lshift listVar {
@@ -210,16 +234,49 @@ proc asr::juliusTransToHTK {transcription stripTriphones} {
   return $transHTK 
 }
 
+# convert Julius to Wavesurfer format
+proc asr::juliusTransToWavesurfer {transcription stripTriphones} {
+  variable Info
+  set trans ""
+  foreach line [split $transcription \n] {
+    if ![regexp {\[\s*([^\s]*)\s*([^\s]*)\s*\]\s*([^\s]*)\s*([^\s]*)} $line dummy start end score symbol] {
+      puts "format error: $line"
+      continue
+    }
+    set start [expr ${start}/$Info(asr:framerate).0]
+    set end [expr ${end}/$Info(asr:framerate).0]
+    if $stripTriphones {
+      regsub {^.*\-} $symbol "" symbol
+      regsub {\+.*$} $symbol "" symbol
+    }
+    set trans "${trans}$start $end $symbol $score\n"
+  }
+  return $trans
+}
+
 
 # Compute recognition info in a given pane.
 proc asr::_computeAsr {w pane} {
   variable Info
   upvar [namespace current]::${pane}::var v
- 
-  set snd [$w cget -sound]
+  upvar ::wsurf::trans::${pane}::var u
+
+  set snd [sound] 
+  $snd copy [$w cget -sound]
   if {[$snd length] == 0} {
     return
   }
+  # set channels to 1 if necessary
+  set channels [$snd cget -channels]
+  if {$channels != 1} {
+    $snd convert -channels 1
+  }
+  # resample if necessary. NOTE: low quality resampling
+  set rate [$snd cget -rate]
+  if {$rate != $Info(asr:samplingrate)} {
+    $snd convert -rate $Info(asr:samplingrate)
+  }
+
   $w messageProc "Running recognizer..."
   $snd write $Info(tmpfile).wav
   exec echo $Info(tmpfile).wav > $Info(tmpfile).lst
@@ -236,23 +293,52 @@ puts "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d 
     $w messageProc "Done recognizing"
   }
 
-  # get word level transcription from $ret
+  # convert julius results into transcription data
   set wordtrans [juliusTransToHTK [getJuliusTranscription $ret word] 0]
-  # save transcription to file
-  set fh [open $Info(tmpfile).rec w]
-  puts $fh $wordtrans
-  close $fh
-  # get phoneme level transcription from $ret
-  set phonetrans [juliusTransToHTK [getJuliusTranscription $ret phoneme] 0]
-  # save transcription to file
-  set fh [open $Info(tmpfile).phn w]
-  puts $fh $phonetrans
-  close $fh
-  ::wsurf::trans::openTranscriptionFile $w $pane $Info(tmpfile).wav soundfile
+  set i 0
+  set map {}
+  foreach row [split $wordtrans \n] {
+    if {[scan $row {%f %f %s %f} start end label score] >= 3} {
+      set u(t1,$i,end) $end
+      set u(t1,$i,label) $label
+      set u(t1,$i,rest) $score
+      if {$i == 0} {
+	set u(t1,start) $start
+      }
+      lappend map $i
+      incr i
+    }
+  }
+  set u(t1,end) $end
+  set u(nLabels) $i
+  set u(map) $map
+  set u(header) ""
+  set u(headerFmt) WaveSurfer
+
+  # this was the old method using files and HTK format
+  if {0} {
+    # get word level transcription from $ret
+    set wordtrans [juliusTransToHTK [getJuliusTranscription $ret word] 0]
+    # save transcription to file
+    set fh [open $Info(tmpfile).rec w]
+    puts $fh $wordtrans
+    close $fh
+    # get phoneme level transcription from $ret
+    set phonetrans [juliusTransToHTK [getJuliusTranscription $ret phoneme] 0]
+    # save transcription to file
+    set fh [open $Info(tmpfile).phn w]
+    puts $fh $phonetrans
+    close $fh
+    ::wsurf::trans::openTranscriptionFile $w $pane $Info(tmpfile).wav soundfile
+  }
+  #::wsurf::_redrawPane $w $pane
+  #::wsurf::trans::redraw $w $pane
+  #puts "v(drawTranscription) = $v(drawTranscription)"
+  puts "u(nLabels) = $u(nLabels)"
 }
 
 
-# Draw voicing info in a given pane.
+# Draw asr result info in a given pane.
 
 proc asr::_drawAsr {w pane} {
 
@@ -295,13 +381,13 @@ proc asr::_drawAsr {w pane} {
 # This procedure is called whenever the widget needs to redraw all panes.
 # For example, when the user zooms.
 
-# proc asr::redraw {w pane} {
-#   upvar [namespace current]::${pane}::var v
+proc asr::redraw {w pane} {
+  upvar [namespace current]::${pane}::var v
 
-#   if {$v(drawAsr)} {
-#     _drawAsr $w $pane
-#   }
-# }
+  if {$v(drawAsr)} {
+    _drawAsr $w $pane
+  }
+}
 
 
 # -----------------------------------------------------------------------------
@@ -351,7 +437,7 @@ proc asr::propertyPane {w pane} {
   
   if {$pane==""} return
   if {$v(drawAsr)} {
-    return [list "Asr" [namespace code drawAsrPage]]
+    return [list "ASR" [namespace code drawAsrPage] "ASR Adv" [namespace code drawAsrAdvancedPage]]
   }
 }
 
@@ -406,15 +492,44 @@ proc asr::drawAsrPage {w pane p} {
     destroy $f
   }
 
-  foreach var [list cfg lat mmf dic lst extraargs inspen] {
+  foreach var [list lang] {
+    set v(t,$var) $v($var)
+  }
+
+  pack [ttk::frame $p.f1] -anchor w
+  ttk::label $p.f1.l -text "ASR Language:" -width 25 -anchor w
+  ttk::combobox $p.f1.om -textvariable [namespace current]::${pane}::var(t,lang) -values $Info(availableLanguages) -state readonly
+  pack $p.f1.l $p.f1.om -side left -padx 3
+
+#  foreach var [list onColor offColor] {
+#    set v(t,$var) $v($var)
+#  }
+
+# colorPropItem $p.f1 "Voiced segment color:" 23 \
+#     [namespace current]::${pane}::var(t,onColor)
+# colorPropItem $p.f2 "Unvoiced segment color:" 23 \
+#     [namespace current]::${pane}::var(t,offColor)
+
+
+}
+
+proc asr::drawAsrAdvancedPage {w pane p} {
+  variable Info
+  upvar [namespace current]::${pane}::var v
+
+  foreach f [winfo children $p] {
+    destroy $f
+  }
+
+  foreach var [list cfg lm mmf lst dic extraargs inspen] {
     set v(t,$var) $v($var)
   }
 
   fileChooserEntry $p.f1 "Config File:" [namespace current]::${pane}::var(t,cfg) .cfg
-  fileChooserEntry $p.f2 "Lattice File:" [namespace current]::${pane}::var(t,lat) .lat
-  fileChooserEntry $p.f3 "Master Macro File:" [namespace current]::${pane}::var(t,mmf) .mmf
-  fileChooserEntry $p.f4 "Dictionary File:" [namespace current]::${pane}::var(t,dic) .dic
-  fileChooserEntry $p.f5 "Word List File:" [namespace current]::${pane}::var(t,lst) .lst
+  fileChooserEntry $p.f2 "Language Models File:" [namespace current]::${pane}::var(t,lm) .lm
+  fileChooserEntry $p.f3 "Acoustic Models File:" [namespace current]::${pane}::var(t,mmf) .mmf
+  fileChooserEntry $p.f4 "Acoustic Models List:" [namespace current]::${pane}::var(t,lst) .lst
+  fileChooserEntry $p.f5 "Dictionary File:" [namespace current]::${pane}::var(t,dic) .jdict
     
   pack [ttk::frame $p.f6] -anchor w -ipady 2
   label $p.f6.l -text "Insertion Penalty" -anchor w -wi 15
@@ -477,11 +592,14 @@ proc asr::getConfiguration {w pane} {
 # For example, after a record operation.
 
 proc asr::soundChanged {w flag} {
- foreach pane [$w _getPanes] {
-  upvar [namespace current]::${pane}::var v
-  if {$v(drawAsr)} {
-   _computeAsr $w $pane
-   _drawAsr $w $pane
+  foreach pane [$w _getPanes] {
+    upvar [namespace current]::${pane}::var v
+    if {$v(drawAsr)} {
+puts "soundChanged redrawing pane $pane"
+
+      _computeAsr $w $pane
+      _drawAsr $w $pane
+      # $w _redrawPane $pane
+    }
   }
- }
 }
