@@ -69,21 +69,26 @@ namespace eval asr {
   set Info(OptionTable) [list \
 		-asr:lang        lang       "Swedish" \
 		-asr:cfg         cfg        "$dir/asr/Swedish/julius.jconf" \
-		-asr:lat         lat        "$dir/asr/swdigloop.lat" \
 		-asr:mmf         mmf        "$dir/asr/Swedish/hmmdefs" \
 		-asr:dic         dic        "$dir/asr/Swedish/sample.jdict" \
 		-asr:lst         lst        "$dir/asr/Swedish/tiedlist" \
 		-asr:lm          lm         "$dir/asr/Swedish/sample.lm" \
 		-asr:extraargs   extraargs  "" \
 		-asr:inspen      inspen     0.0 \
-			   ]
+		-asr:translevel  translevel "word" \
+		-asr:confidenceflag  confidenceflag   0 \
+		-asr:forcedflag  forcedflag   0 \
+		-asr:forcedext   forcedext  "ort" \
+		   ]
 
   set Info(tmpfile) [file join [util::tmpdir] asrtmp.[pid]]
   set Info(asrexe) "$dir/asr/julius-4.2.3"
-  # the next should be read from julius.jconf
-  set Info(asr:samplingrate) 16000
-  set Info(asr:framerate) 100
-  #set Info(asrexe) "julius"
+  # the next should be read from julius acoustic models. Problem is the models are
+  # binary files and not easily parsed. Alternatively it can be read from julius
+  # recognition output, but the problem is that it's needed before julius is run
+  # in order to resample. Another alternative could be to rely on julius resampling
+  # but it dosen't seem to support other than 48kHz resampling
+  set Info(samplingrate) 16000
 } 
 
 
@@ -165,7 +170,6 @@ proc asr::addAsrStuff {w pane args} {
   upvar [namespace current]::${pane}::var v
   
   file delete -force $Info(tmpfile).wav
-  file delete -force $Info(tmpfile).rec
   
   foreach {option key default} $Info(OptionTable) {
     set a($option) $default
@@ -235,16 +239,17 @@ proc asr::juliusTransToHTK {transcription stripTriphones} {
 }
 
 # convert Julius to Wavesurfer format
-proc asr::juliusTransToWavesurfer {transcription stripTriphones} {
-  variable Info
+proc asr::juliusTransToWavesurfer {juliusTrans windowSize frameShift stripTriphones} {
   set trans ""
-  foreach line [split $transcription \n] {
+  foreach line [split $juliusTrans \n] {
     if ![regexp {\[\s*([^\s]*)\s*([^\s]*)\s*\]\s*([^\s]*)\s*([^\s]*)} $line dummy start end score symbol] {
       puts "format error: $line"
       continue
     }
-    set start [expr ${start}/$Info(asr:framerate).0]
-    set end [expr ${end}/$Info(asr:framerate).0]
+    if {$start != 0} {
+      set start [expr ${start}*$frameShift+$windowSize]
+    }
+    set end [expr ${end}*$frameShift+$windowSize]
     if $stripTriphones {
       regsub {^.*\-} $symbol "" symbol
       regsub {\+.*$} $symbol "" symbol
@@ -254,6 +259,28 @@ proc asr::juliusTransToWavesurfer {transcription stripTriphones} {
   return $trans
 }
 
+# convert Julius to Wavesurfer format
+proc asr::getJuliusCMScores {juliusOutput} {
+
+  regexp {cmscore1\: ([^\n]*)} $juliusOutput dummy scores
+
+  return [split $scores " "]
+}
+
+# convert Julius to Wavesurfer format
+proc asr::getJuliusParameters {juliusOutput} {
+
+  # feature extraction:
+  regexp {sample frequency =\s*([0-9]*) Hz} $juliusOutput dummy samplingFrequency
+  regexp {window size =\s*[0-9]* samples \(([0-9.]*) ms\)} $juliusOutput dummy windowSizeMs
+  regexp {frame shift =\s*[0-9]* samples \(([0-9.]*) ms\)} $juliusOutput dummy frameShiftMs
+
+  set faParams(samplingFrequency) $samplingFrequency
+  set faParams(windowSize) [expr $windowSizeMs/1000.0]
+  set faParams(frameShift) [expr $frameShiftMs/1000.0]
+
+  return [array get faParams]
+}
 
 # Compute recognition info in a given pane.
 proc asr::_computeAsr {w pane} {
@@ -273,16 +300,17 @@ proc asr::_computeAsr {w pane} {
   }
   # resample if necessary. NOTE: low quality resampling
   set rate [$snd cget -rate]
-  if {$rate != $Info(asr:samplingrate)} {
-    $snd convert -rate $Info(asr:samplingrate)
+  if {$rate != $Info(samplingrate)} {
+    $snd convert -rate $Info(samplingrate)
   }
 
   $w messageProc "Running recognizer..."
   $snd write $Info(tmpfile).wav
   exec echo $Info(tmpfile).wav > $Info(tmpfile).lst
+  set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -filelist $Info(tmpfile).lst -palign"
 # for debugging
-puts "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -spsegment -filelist $Info(tmpfile).lst"
-  if {[catch {exec $Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -spsegment -filelist $Info(tmpfile).lst} ret]} {
+puts "$asrcommand"
+    if {[catch {eval exec $asrcommand} ret]} {
 
     # User probably aborted this computation (or an error occurred)
     if {![regexp {1 files processed} $ret]} {
@@ -293,11 +321,15 @@ puts "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d 
     $w messageProc "Done recognizing"
   }
 
+  # get feature extraction parameters
+  array set feParams [getJuliusParameters $ret]
+
   # convert julius results into transcription data
-  set wordtrans [juliusTransToHTK [getJuliusTranscription $ret word] 0]
+  set juliusTrans [getJuliusTranscription $ret $v(translevel)]
+  set trans [juliusTransToWavesurfer $juliusTrans $feParams(windowSize) $feParams(frameShift) 0]
   set i 0
   set map {}
-  foreach row [split $wordtrans \n] {
+  foreach row [split $trans \n] {
     if {[scan $row {%f %f %s %f} start end label score] >= 3} {
       set u(t1,$i,end) $end
       set u(t1,$i,label) $label
@@ -314,27 +346,21 @@ puts "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d 
   set u(map) $map
   set u(header) ""
   set u(headerFmt) WaveSurfer
-
-  # this was the old method using files and HTK format
-  if {0} {
-    # get word level transcription from $ret
-    set wordtrans [juliusTransToHTK [getJuliusTranscription $ret word] 0]
-    # save transcription to file
-    set fh [open $Info(tmpfile).rec w]
-    puts $fh $wordtrans
-    close $fh
-    # get phoneme level transcription from $ret
-    set phonetrans [juliusTransToHTK [getJuliusTranscription $ret phoneme] 0]
-    # save transcription to file
-    set fh [open $Info(tmpfile).phn w]
-    puts $fh $phonetrans
-    close $fh
-    ::wsurf::trans::openTranscriptionFile $w $pane $Info(tmpfile).wav soundfile
-  }
-  #::wsurf::_redrawPane $w $pane
-  #::wsurf::trans::redraw $w $pane
-  #puts "v(drawTranscription) = $v(drawTranscription)"
   puts "u(nLabels) = $u(nLabels)"
+
+  # add background color in case
+  if {$v(confidenceflag) && $v(translevel) == "word"} {
+    set cmscores [getJuliusCMScores $ret]
+puts "cmscores $cmscores"
+    for {set i 0} {$i<$u(nLabels)} {incr i} {
+      puts "cmscore [lindex $cmscores $i]"
+      set u(t1,$i,bgColor) [format #%04X%04X%04X [expr int((1.0-[lindex $cmscores $i])*65535)] 0 0]
+    }
+  } else {
+    for {set i 0} {$i<$u(nLabels)} {incr i} {
+      set u(t1,$i,bgColor) $u(bdColor)
+    }
+  }
 }
 
 
@@ -342,10 +368,15 @@ puts "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d 
 
 proc asr::_drawAsr {w pane} {
 
-    ::wsurf::trans::redraw $w $pane
+  ::wsurf::trans::redraw $w $pane
   upvar [namespace current]::${pane}::var v
-#  upvar ::wsurf::trans::${pane}::var u
+  upvar ::wsurf::trans::${pane}::var u
 
+  # add confidence specific background colors
+  set c [$pane canvas]
+  for {set i 0} {$i<$u(nLabels)} {incr i} {
+    $c itemconfigure lab$i -fill $u(t1,$i,bgColor)
+  }
 #  $u(drawTranscription)
 
   # set c [$pane canvas]
@@ -492,14 +523,38 @@ proc asr::drawAsrPage {w pane p} {
     destroy $f
   }
 
-  foreach var [list lang] {
+  foreach var [list lang translevel confidenceflag forcedflag forcedext] {
     set v(t,$var) $v($var)
   }
 
   pack [ttk::frame $p.f1] -anchor w
-  ttk::label $p.f1.l -text "ASR Language:" -width 25 -anchor w
+  ttk::label $p.f1.l -text "ASR Language:" -width 30 -anchor w
   ttk::combobox $p.f1.om -textvariable [namespace current]::${pane}::var(t,lang) -values $Info(availableLanguages) -state readonly
   pack $p.f1.l $p.f1.om -side left -padx 3
+
+  pack [ttk::frame $p.f2] -anchor w
+  ttk::label $p.f2.l -text "Transcription level:" -width 30 -anchor w
+    ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,translevel) -values {word phoneme} -state readonly
+  pack $p.f2.l $p.f2.om -side left -padx 3
+
+  pack [ttk::frame $p.f3] -anchor w
+  ttk::label $p.f3.l -text "Show confidence:" -anchor w
+  ttk::checkbutton $p.f3.om -variable [namespace current]::${pane}::var(t,confidenceflag)
+  pack $p.f3.om $p.f3.l -side left -padx 0
+
+  pack [ttk::separator $p.f3sep -orient horizontal] -anchor w -fill x
+
+  pack [ttk::frame $p.f4] -anchor w
+  ttk::label $p.f4.l -text "Forced alignment:" -width 30 -anchor w
+  ttk::checkbutton $p.f4.om -variable [namespace current]::${pane}::var(t,forcedflag)
+  pack $p.f4.om $p.f4.l -side left -padx 0
+
+  pack [ttk::frame $p.f5] -anchor w
+  ttk::label $p.f5.l -text "Orthographic transcription extension:" -width 30 -anchor w
+  ttk::entry $p.f5.om -textvariable [namespace current]::${pane}::var(t,forcedext)
+  pack $p.f5.l $p.f5.om -side left -padx 3
+
+  pack [ttk::separator $p.f6sep -orient horizontal] -anchor w -fill x
 
 #  foreach var [list onColor offColor] {
 #    set v(t,$var) $v($var)
