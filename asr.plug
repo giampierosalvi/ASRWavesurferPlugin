@@ -5,20 +5,7 @@
 # This is a plugin that allows to run the Julius recognizer embedded
 # in Wavesurfer
 
-# from Niklas
-# configfile = "/NOBACKUP/niklasva/nst/nst_rec/work/refrec096-tmh/wordloop_test/config/julius.jconf"
-# hlist = "/NOBACKUP/niklasva/nst/dist/distv0.2/julius-MFCC_0_D_A-16kHz/tied.lis"
-# hmm = "/NOBACKUP/niklasva/nst/dist/distv0.2/julius-MFCC_0_D_A-16kHz/tied_64.mmf"
-# inputtype = "raw" #För wav-filer, mfc för mfcc
-# lm = "/NOBACKUP/niklasva/nst/dist/sample.lm"
-# dict = "/NOBACKUP/niklasva/nst/dist/sample.dict"
-# piece ="fil med lista av filer"
-#
-# julius -C $configfile -nosectioncheck -hlist $hlist  -input $inputtype -d $lm -v $dict -h $hmm -filelist $piece -fallback1pass -spsegment
-
-
 # Register plug-in with the callbacks we want to use.
-
 wsurf::RegisterPlugin ASR \
   -description "This plug-in adds online speech recognition support.\
   Right click on a pane and select \"Create Pane/Speech Recognition\".\
@@ -83,7 +70,16 @@ namespace eval asr {
 		   ]
 
   set Info(tmpfile) [file join [util::tmpdir] asrtmp.[pid]]
-  set Info(asrexe) "$dir/asr/julius-4.2.3_$::tcl_platform(os)_$::tcl_platform(machine)"
+
+  # find Julius executable. At the moment only locally stored exe files are considered, in the future,
+  # first check if Julius is already installed in the system
+  # tcl_platform(os): Linux, Windows NT, Darwin
+  set os [lindex $::tcl_platform(os) 0]
+  set extension ""
+  if {$os=="Windows"} { set extension ".exe" }
+  # tcl_platform(machine): x86_64, intel, x86_64
+  set machine $::tcl_platform(machine)
+  set Info(asrexe) "$dir/asr/julius-4.3.1_${os}_$machine$extension"
   # the next should be read from julius acoustic models. Problem is the models are
   # binary files and not easily parsed. Alternatively it can be read from julius
   # recognition output, but the problem is that it's needed before julius is run
