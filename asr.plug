@@ -60,19 +60,20 @@ namespace eval asr {
     set dir [file dirname [info script]]
   }
 
-  set availLangs [glob -directory [file join $dir asr] [file join * lang.conf]]
+  set languageDirs [glob -directory [file join $dir asr] [file join * lang.conf]]
   set Info(availableLanguages) {}
-  foreach langdir $availLangs {
+  foreach langdir $languageDirs {
     lappend Info(availableLanguages) [lindex [file split $langdir] end-1]
   }
 
   set Info(OptionTable) [list \
 		-asr:lang        lang       "Swedish" \
+		-asr:grammarType grammarType "digits" \
 		-asr:cfg         cfg        "$dir/asr/Swedish/julius.jconf" \
-		-asr:mmf         mmf        "$dir/asr/Swedish/hmmdefs" \
-		-asr:dic         dic        "$dir/asr/Swedish/sample.jdict" \
-		-asr:lst         lst        "$dir/asr/Swedish/tiedlist" \
-		-asr:lm          lm         "$dir/asr/Swedish/sample.lm" \
+		-asr:mmf         mmf        "$dir/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.mmf" \
+		-asr:dic         dic        "$dir/asr/Swedish/nst_testset.dict" \
+		-asr:lst         lst        "$dir/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.lst" \
+		-asr:lm          lm         "$dir/asr/Swedish/nst_testset.lm" \
 		-asr:extraargs   extraargs  "" \
 		-asr:inspen      inspen     0.0 \
 		-asr:translevel  translevel "word" \
@@ -82,7 +83,7 @@ namespace eval asr {
 		   ]
 
   set Info(tmpfile) [file join [util::tmpdir] asrtmp.[pid]]
-  set Info(asrexe) "$dir/asr/julius-4.2.3"
+  set Info(asrexe) "$dir/asr/julius-4.2.3_$::tcl_platform(os)_$::tcl_platform(machine)"
   # the next should be read from julius acoustic models. Problem is the models are
   # binary files and not easily parsed. Alternatively it can be read from julius
   # recognition output, but the problem is that it's needed before julius is run
@@ -242,7 +243,7 @@ proc asr::juliusTransToHTK {transcription stripTriphones} {
 proc asr::juliusTransToWavesurfer {juliusTrans windowSize frameShift stripTriphones} {
   set trans ""
   foreach line [split $juliusTrans \n] {
-    if ![regexp {\[\s*([^\s]*)\s*([^\s]*)\s*\]\s*([^\s]*)\s*([^\s]*)} $line dummy start end score symbol] {
+    if ![regexp {\[\s*([^\s]*)\s*([^\s]*)\s*\]\s*([^\s]*)\s*([^\s]*)(\s\[([^\s]*)\])?} $line dummy start end score symbol1 dummy symbol2] {
       puts "format error: $line"
       continue
     }
@@ -250,6 +251,11 @@ proc asr::juliusTransToWavesurfer {juliusTrans windowSize frameShift stripTripho
       set start [expr ${start}*$frameShift+$windowSize]
     }
     set end [expr ${end}*$frameShift+$windowSize]
+    if { $symbol2!="" } {
+      set symbol $symbol2
+    } else {
+      set symbol $symbol1
+    }
     if $stripTriphones {
       regsub {^.*\-} $symbol "" symbol
       regsub {\+.*$} $symbol "" symbol
@@ -282,6 +288,53 @@ proc asr::getJuliusParameters {juliusOutput} {
   return [array get faParams]
 }
 
+# note that this ignores lines that don't fit the format specified by the regexp
+proc asr::readDictionary { filename } {
+  set dictionary [dict create]
+  set fh [open $filename]
+  foreach line [split [read $fh] \n] {
+    set res [regexp -all {^([^\t]*)[\s\t]*(\[.*\])?[\s\t]*([^\s].*[^\s])[\s]*$} $line all word dummy pron]
+    if { ! $res } { continue }
+    dict lappend dictionary $word $pron
+  }
+  dict lappend dictionary <s> sil
+  dict lappend dictionary </s> sil
+
+  return $dictionary
+}
+
+proc asr::TranscriptionToJuliusGrammar {tran fulldict} {
+  set tran "<s> [string toupper $tran] </s>"
+  set dict ""
+  set gram ""
+  set wid 0
+  # generate dictionary
+  foreach word $tran {
+    if { ! [dict exists $fulldict $word] } {
+      return "missing word $word"
+    }
+    foreach pron [dict get $fulldict $word] {
+      set dict "$dict$wid \[$word\] $pron\n"
+    }
+    incr wid
+  }
+  # generate grammar
+  set nodei 0
+  set tranlen [llength $tran]
+  for {set i [expr $tranlen-1]} {$i>=0} {incr i -1} {
+    set nextnodei [expr $nodei+1]
+    set islastnode [expr $i == $tranlen]
+    set gram "$gram$nodei $i $nextnodei 0 $islastnode\n"
+    incr nodei
+  }
+  set gram "$gram$nodei -1 -1 1 0\n"
+
+  set grammar(gram) $gram
+  set grammar(dict) $dict
+
+  return [array get grammar]
+}
+
 # Compute recognition info in a given pane.
 proc asr::_computeAsr {w pane} {
   variable Info
@@ -307,15 +360,37 @@ proc asr::_computeAsr {w pane} {
   $w messageProc "Running recognizer..."
   $snd write $Info(tmpfile).wav
   exec echo $Info(tmpfile).wav > $Info(tmpfile).lst
-  set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -filelist $Info(tmpfile).lst -palign"
-# for debugging
-puts "$asrcommand"
-    if {[catch {eval exec $asrcommand} ret]} {
+  if { $v(forcedflag) } {
+    # read transcription
+    set ortFileName [regsub {[^\.]*$} [file normalize [$w getInfo fileName]] $v(forcedext)]
+    if {! [file exists $ortFileName]} {
+      $w messageProc "Missing orthographic transcription"
+      error "Missing orthographic transcription"
+    }
+    set fi [open $ortFileName "r"]
+    set tran [regexp -all -inline {\S+} [string trim [read $fi]]]
+    close $fi
+    set fulldict [readDictionary ~/.wavesurfer/1.8/plugins/asr/Swedish/htk.dic]
+    array set fagram [TranscriptionToJuliusGrammar $tran $fulldict]
+    set fo [open $Info(tmpfile).dict "w"]
+    puts $fo $fagram(dict)
+    close $fo
+    set fo [open $Info(tmpfile).dfa "w"]
+    puts $fo $fagram(gram)
+    close $fo
+    # -v $Info(tmpfile).dict 
+    set asrcommand "$Info(asrexe) -nosectioncheck -gram $Info(tmpfile) -walign -palign -hlist $v(lst) -input rawfile -h $v(mmf) -filelist $Info(tmpfile).lst -iwsp "
+  } else {
+    set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -filelist $Info(tmpfile).lst -palign"
+  }
+  # for debugging
+  puts "$asrcommand"
+  if {[catch {eval exec $asrcommand} ret]} {
 
     # User probably aborted this computation (or an error occurred)
-    if {![regexp {1 files processed} $ret]} {
-      $w messageProc "$ret"
-      error "$ret"
+    if {(![regexp {1 files processed} $ret]) || ([regexp {search failed} $ret])} {
+      $w messageProc "Recognition Failed"
+      error "Recognition Failed, more details below\n\n$ret"
     }
   } else {
     $w messageProc "Done recognizing"
@@ -329,6 +404,7 @@ puts "$asrcommand"
   set trans [juliusTransToWavesurfer $juliusTrans $feParams(windowSize) $feParams(frameShift) 0]
   set i 0
   set map {}
+  set theend 0
   foreach row [split $trans \n] {
     if {[scan $row {%f %f %s %f} start end label score] >= 3} {
       set u(t1,$i,end) $end
@@ -523,7 +599,7 @@ proc asr::drawAsrPage {w pane p} {
     destroy $f
   }
 
-  foreach var [list lang translevel confidenceflag forcedflag forcedext] {
+  foreach var [list lang grammarType translevel confidenceflag forcedflag forcedext] {
     set v(t,$var) $v($var)
   }
 
@@ -533,26 +609,31 @@ proc asr::drawAsrPage {w pane p} {
   pack $p.f1.l $p.f1.om -side left -padx 3
 
   pack [ttk::frame $p.f2] -anchor w
-  ttk::label $p.f2.l -text "Transcription level:" -width 30 -anchor w
-    ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,translevel) -values {word phoneme} -state readonly
+  ttk::label $p.f2.l -text "Grammar type:" -width 30 -anchor w
+  ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -values {digits 1kwords 1Mwords} -state readonly
   pack $p.f2.l $p.f2.om -side left -padx 3
 
   pack [ttk::frame $p.f3] -anchor w
-  ttk::label $p.f3.l -text "Show confidence:" -anchor w
-  ttk::checkbutton $p.f3.om -variable [namespace current]::${pane}::var(t,confidenceflag)
-  pack $p.f3.om $p.f3.l -side left -padx 0
-
-  pack [ttk::separator $p.f3sep -orient horizontal] -anchor w -fill x
+  ttk::label $p.f3.l -text "Transcription level:" -width 30 -anchor w
+    ttk::combobox $p.f3.om -textvariable [namespace current]::${pane}::var(t,translevel) -values {word phoneme} -state readonly
+  pack $p.f3.l $p.f3.om -side left -padx 3
 
   pack [ttk::frame $p.f4] -anchor w
-  ttk::label $p.f4.l -text "Forced alignment:" -width 30 -anchor w
-  ttk::checkbutton $p.f4.om -variable [namespace current]::${pane}::var(t,forcedflag)
+  ttk::label $p.f4.l -text "Show confidence:" -anchor w
+  ttk::checkbutton $p.f4.om -variable [namespace current]::${pane}::var(t,confidenceflag)
   pack $p.f4.om $p.f4.l -side left -padx 0
 
-  pack [ttk::frame $p.f5] -anchor w
-  ttk::label $p.f5.l -text "Orthographic transcription extension:" -width 30 -anchor w
-  ttk::entry $p.f5.om -textvariable [namespace current]::${pane}::var(t,forcedext)
-  pack $p.f5.l $p.f5.om -side left -padx 3
+  pack [ttk::separator $p.f5 -orient horizontal] -anchor w -fill x
+
+  pack [ttk::frame $p.f6] -anchor w
+  ttk::label $p.f6.l -text "Forced alignment:" -width 30 -anchor w
+  ttk::checkbutton $p.f6.om -variable [namespace current]::${pane}::var(t,forcedflag)
+  pack $p.f6.om $p.f6.l -side left -padx 0
+
+  pack [ttk::frame $p.f7] -anchor w
+  ttk::label $p.f7.l -text "Orthographic transcription extension:" -width 30 -anchor w
+  ttk::entry $p.f7.om -textvariable [namespace current]::${pane}::var(t,forcedext)
+  pack $p.f7.l $p.f7.om -side left -padx 3
 
   pack [ttk::separator $p.f6sep -orient horizontal] -anchor w -fill x
 
