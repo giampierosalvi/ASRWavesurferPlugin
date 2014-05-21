@@ -355,7 +355,10 @@ proc asr::_computeAsr {w pane} {
 
   $w messageProc "Running recognizer..."
   $snd write $Info(tmpfile).wav
-  exec echo $Info(tmpfile).wav > $Info(tmpfile).lst
+  set fo [open $Info(tmpfile).lst "w"]
+  puts $fo $Info(tmpfile).wav
+  close $fo
+  #exec echo $Info(tmpfile).wav > $Info(tmpfile).lst
   if { $v(forcedflag) } {
     # read transcription
     set ortFileName [regsub {[^\.]*$} [file normalize [$w getInfo fileName]] $v(forcedext)]
