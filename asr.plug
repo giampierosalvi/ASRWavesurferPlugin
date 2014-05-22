@@ -42,25 +42,19 @@ namespace eval asr {
   variable Info
 
   if [info exists ::wsurf::Info(CurrentPluginPath)] {
-    set dir [file dirname $::wsurf::Info(CurrentPluginPath)]
+    set Info(dir) [file dirname $::wsurf::Info(CurrentPluginPath)]
   } else {
-    set dir [file dirname [info script]]
-  }
-
-  set languageDirs [glob -directory [file join $dir asr] [file join * lang.conf]]
-  set Info(availableLanguages) {}
-  foreach langdir $languageDirs {
-    lappend Info(availableLanguages) [lindex [file split $langdir] end-1]
+    set Info(dir) [file dirname [info script]]
   }
 
   set Info(OptionTable) [list \
 		-asr:lang        lang       "Swedish" \
 		-asr:grammarType grammarType "digits" \
-		-asr:cfg         cfg        "$dir/asr/Swedish/julius.jconf" \
-		-asr:mmf         mmf        "$dir/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.mmf" \
-		-asr:dic         dic        "$dir/asr/Swedish/nst_testset.dict" \
-		-asr:lst         lst        "$dir/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.lst" \
-		-asr:lm          lm         "$dir/asr/Swedish/nst_testset.lm" \
+		-asr:cfg         cfg        "$Info(dir)/asr/Swedish/julius.jconf" \
+		-asr:mmf         mmf        "$Info(dir)/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.mmf" \
+		-asr:dic         dic        "$Info(dir)/asr/Swedish/nst_testset.dict" \
+		-asr:lst         lst        "$Info(dir)/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.lst" \
+		-asr:lm          lm         "$Info(dir)/asr/Swedish/nst_testset.lm" \
 		-asr:extraargs   extraargs  "" \
 		-asr:inspen      inspen     0.0 \
 		-asr:translevel  translevel "word" \
@@ -79,7 +73,7 @@ namespace eval asr {
   if {$os=="Windows"} { set extension ".exe" }
   # tcl_platform(machine): x86_64, intel, x86_64
   set machine $::tcl_platform(machine)
-  set Info(asrexe) "$dir/asr/julius-4.3.1_${os}_$machine$extension"
+  set Info(asrexe) "$Info(dir)/asr/julius-4.3.1_${os}_$machine$extension"
   # the next should be read from julius acoustic models. Problem is the models are
   # binary files and not easily parsed. Alternatively it can be read from julius
   # recognition output, but the problem is that it's needed before julius is run
@@ -347,10 +341,16 @@ proc asr::_computeAsr {w pane} {
   if {$channels != 1} {
     $snd convert -channels 1
   }
-  # resample if necessary. NOTE: low quality resampling
+  # resample if necessary. NOTE: snack has very low quality resampling
   set rate [$snd cget -rate]
+  set resampling ""
   if {$rate != $Info(samplingrate)} {
-    $snd convert -rate $Info(samplingrate)
+    if {$rate == 48000 } {
+      set resampling "-48"
+    } else {
+      tk_messageBox -message "Warning: using low quality snack resampler. Check sampling rate to avoid this"
+      $snd convert -rate $Info(samplingrate)
+    }
   }
 
   $w messageProc "Running recognizer..."
@@ -378,9 +378,9 @@ proc asr::_computeAsr {w pane} {
     puts $fo $fagram(gram)
     close $fo
     # -v $Info(tmpfile).dict 
-    set asrcommand "$Info(asrexe) -nosectioncheck -gram $Info(tmpfile) -walign -palign -hlist $v(lst) -input rawfile -h $v(mmf) -filelist $Info(tmpfile).lst -iwsp "
+    set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -gram $Info(tmpfile) -walign -palign -hlist $v(lst) -input rawfile -h $v(mmf) -filelist $Info(tmpfile).lst -iwsp $resampling"
   } else {
-    set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -filelist $Info(tmpfile).lst -palign"
+    set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -filelist $Info(tmpfile).lst -palign $resampling"
   }
   # for debugging
   puts "$asrcommand"
@@ -602,15 +602,25 @@ proc asr::drawAsrPage {w pane p} {
     set v(t,$var) $v($var)
   }
 
+  set languageDirs [glob -directory [file join $Info(dir) asr] [file join * lang.conf]]
+  set v(availableLanguages) {}
+  foreach langdir $languageDirs {
+    lappend v(availableLanguages) [lindex [file split $langdir] end-1]
+  }
+
   pack [ttk::frame $p.f1] -anchor w
   ttk::label $p.f1.l -text "ASR Language:" -width 30 -anchor w
-  ttk::combobox $p.f1.om -textvariable [namespace current]::${pane}::var(t,lang) -values $Info(availableLanguages) -state readonly
+  ttk::combobox $p.f1.om -textvariable [namespace current]::${pane}::var(t,lang) -values $v(availableLanguages) -state readonly
   pack $p.f1.l $p.f1.om -side left -padx 3
 
   pack [ttk::frame $p.f2] -anchor w
   ttk::label $p.f2.l -text "Grammar type:" -width 30 -anchor w
   ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -values {digits 1kwords 1Mwords} -state readonly
   pack $p.f2.l $p.f2.om -side left -padx 3
+
+  # here find a way to change the values of $p.f2.om dynamically based on the selection in $p.f1.om
+  #  set grammars [glob -directory [file join $Info(dir) asr $v(lang)] *.{lm,dfa}]
+
 
   pack [ttk::frame $p.f3] -anchor w
   ttk::label $p.f3.l -text "Transcription level:" -width 30 -anchor w
