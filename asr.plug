@@ -331,6 +331,9 @@ proc asr::_computeAsr {w pane} {
   upvar [namespace current]::${pane}::var v
   upvar ::wsurf::trans::${pane}::var u
 
+  # these are flags that are used regardless if it is forced alignment or recognition
+  set commonFlags "-C $v(cfg) -nosectioncheck -hlist $v(lst) -h $v(mmf) -input rawfile -iwsp -filelist $Info(tmpfile).lst"
+
   set snd [sound] 
   $snd copy [$w cget -sound]
   if {[$snd length] == 0} {
@@ -343,10 +346,10 @@ proc asr::_computeAsr {w pane} {
   }
   # resample if necessary. NOTE: snack has very low quality resampling
   set rate [$snd cget -rate]
-  set resampling ""
-  if {$rate != $Info(samplingrate)} {
-    if {$rate == 48000 } {
-      set resampling "-48"
+  set resamplingFlag ""
+  if { $rate != $Info(samplingrate) } {
+    if { $rate == 48000 } {
+      set resamplingFlag "-48"
     } else {
       tk_messageBox -message "Warning: using low quality snack resampler. Check sampling rate to avoid this"
       $snd convert -rate $Info(samplingrate)
@@ -358,12 +361,11 @@ proc asr::_computeAsr {w pane} {
   set fo [open $Info(tmpfile).lst "w"]
   puts $fo $Info(tmpfile).wav
   close $fo
-  #exec echo $Info(tmpfile).wav > $Info(tmpfile).lst
+  # create right flags depending on type of recognition
   if { $v(forcedflag) } {
     # read transcription
     set ortFileName [regsub {[^\.]*$} [file normalize [$w getInfo fileName]] $v(forcedext)]
     if {! [file exists $ortFileName]} {
-      $w messageProc "Missing orthographic transcription"
       error "Missing orthographic transcription"
     }
     set fi [open $ortFileName "r"]
@@ -378,62 +380,88 @@ proc asr::_computeAsr {w pane} {
     puts $fo $fagram(gram)
     close $fo
     # -v $Info(tmpfile).dict 
-    set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -gram $Info(tmpfile) -walign -palign -hlist $v(lst) -input rawfile -h $v(mmf) -filelist $Info(tmpfile).lst -iwsp $resampling"
+    set v(lm) ""
+    set v(dic) ""
+    set v(dfabn) $Info(tmpfile)
+    set grammarFlags "-gram $v(dfabn)"
   } else {
-    set asrcommand "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input rawfile -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -filelist $Info(tmpfile).lst -palign $resampling"
-  }
-  # for debugging
-  puts "$asrcommand"
-  if {[catch {eval exec $asrcommand} ret]} {
-
-    # User probably aborted this computation (or an error occurred)
-    if {(![regexp {1 files processed} $ret]) || ([regexp {search failed} $ret])} {
-      $w messageProc "Recognition Failed"
-      error "Recognition Failed, more details below\n\n$ret"
-    }
-  } else {
-    $w messageProc "Done recognizing"
-  }
-
-  # get feature extraction parameters
-  array set feParams [getJuliusParameters $ret]
-
-  # convert julius results into transcription data
-  set juliusTrans [getJuliusTranscription $ret $v(translevel)]
-  set trans [juliusTransToWavesurfer $juliusTrans $feParams(windowSize) $feParams(frameShift) 0]
-  set i 0
-  set map {}
-  set theend 0
-  foreach row [split $trans \n] {
-    if {[scan $row {%f %f %s %f} start end label score] >= 3} {
-      set u(t1,$i,end) $end
-      set u(t1,$i,label) $label
-      set u(t1,$i,rest) $score
-      if {$i == 0} {
-	set u(t1,start) $start
+    switch [file extension $v(grammarType)] {
+      .lm {
+	set v(lm) [file join $Info(dir) asr $v(lang) $v(grammarType)]
+	set v(dic) [regsub {.lm$} $v(lm) {.dict}]
+	set v(dfabn) ""
+	set grammarFlags "-d $v(lm) -v $v(dic)"
       }
-      lappend map $i
-      incr i
+      .dfa {
+	set v(lm) ""
+	set v(dic) ""
+	set v(dfabn) [file join $Info(dir) asr $v(lang) [regsub {.dfa$} $v(grammarType) {}]]
+	set grammarFlags "-gram $v(dfabn)"
+      }
+      default {
+	set v(lm) ""
+	set v(dic) ""
+	set v(dfabn) ""
+	set grammarFlags ""
+      }	
     }
+    #set asrcommand "$Info(asrexe) -walign -palign $resamplingFlag"
   }
-  set u(t1,end) $end
-  set u(nLabels) $i
-  set u(map) $map
-  set u(header) ""
-  set u(headerFmt) WaveSurfer
-  puts "u(nLabels) = $u(nLabels)"
+  if { $grammarFlags != "" } {
+    set asrcommand "$Info(asrexe) $commonFlags $grammarFlags -fallback1pass -palign $resamplingFlag"
+    # for debugging
+    puts "$asrcommand"
+    if {[catch {eval exec $asrcommand} ret]} {
 
-  # add background color in case
-  if {$v(confidenceflag) && $v(translevel) == "word"} {
-    set cmscores [getJuliusCMScores $ret]
-puts "cmscores $cmscores"
-    for {set i 0} {$i<$u(nLabels)} {incr i} {
-      puts "cmscore [lindex $cmscores $i]"
-      set u(t1,$i,bgColor) [format #%04X%04X%04X [expr int((1.0-[lindex $cmscores $i])*65535)] 0 0]
+      # User probably aborted this computation (or an error occurred)
+      if {(![regexp {1 files processed} $ret]) || ([regexp {search failed} $ret])} {
+	$w messageProc "Recognition Failed"
+	error "Recognition Failed, more details below\n\n$ret"
+      }
+    } else {
+      $w messageProc "Done recognizing"
     }
-  } else {
-    for {set i 0} {$i<$u(nLabels)} {incr i} {
-      set u(t1,$i,bgColor) $u(bdColor)
+
+    # get feature extraction parameters
+    array set feParams [getJuliusParameters $ret]
+
+    # convert julius results into transcription data
+    set juliusTrans [getJuliusTranscription $ret $v(translevel)]
+    set trans [juliusTransToWavesurfer $juliusTrans $feParams(windowSize) $feParams(frameShift) 0]
+    set i 0
+    set map {}
+    set theend 0
+    foreach row [split $trans \n] {
+      if {[scan $row {%f %f %s %f} start end label score] >= 3} {
+	set u(t1,$i,end) $end
+	set u(t1,$i,label) $label
+	set u(t1,$i,rest) $score
+	if {$i == 0} {
+	  set u(t1,start) $start
+	}
+	lappend map $i
+	incr i
+      }
+    }
+    set u(t1,end) $end
+    set u(nLabels) $i
+    set u(map) $map
+    set u(header) ""
+    set u(headerFmt) WaveSurfer
+    puts "u(nLabels) = $u(nLabels)"
+
+    # add background color in case
+    if {$v(confidenceflag) && $v(translevel) == "word"} {
+      set cmscores [getJuliusCMScores $ret]
+      puts "cmscores $cmscores"
+      for {set i 0} {$i<$u(nLabels)} {incr i} {
+	puts "cmscore [lindex $cmscores $i]"
+	set u(t1,$i,bgColor) [format #%04X%04X%04X [expr int((1.0-[lindex $cmscores $i])*65535)] 0 0]
+      }
+    } else {
+      for {set i 0} {$i<$u(nLabels)} {incr i} {
+	set u(t1,$i,bgColor) $u(bdColor)
+      }
     }
   }
 }
@@ -580,16 +608,27 @@ proc asr::fileChooserEntry {w label var ext} {
 		 }"
 
   pack [ttk::frame $w] -anchor w -ipady 2
-
-    label $w.l -text $label -anchor w -wi 15
-    entry $w.e -textvariable $var -wi 25
-    button $w.b -text Browse... -command [namespace code "set $var \[tk_getOpenFile -defaultextension $ext -filetypes $types\]"] 
+  
+  label $w.l -text $label -anchor w -wi 15
+  entry $w.e -textvariable $var -wi 25
+  button $w.b -text Browse... -command [namespace code "set $var \[tk_getOpenFile -defaultextension $ext -filetypes $types\]"] 
     
-    pack $w.l $w.e $w.b -side left -padx 3
+  pack $w.l $w.e $w.b -side left -padx 3
+}
+
+proc asr::updateGrammars {langcombobox gramcombobox} {
+  variable Info
+
+  set lang [$langcombobox get]
+  set gramFiles [glob -directory [file join $Info(dir) asr $lang] *.{lm,dfa}]
+  set grammars {}
+  foreach gramFile $gramFiles {
+    lappend grammars [lindex [file split $gramFile] end]
+  }
+  $gramcombobox configure -values $grammars
 }
 
 # This procedure draws the properties notebook-page for the "Asr" tab.
-
 proc asr::drawAsrPage {w pane p} {
   variable Info
   upvar [namespace current]::${pane}::var v
@@ -615,12 +654,14 @@ proc asr::drawAsrPage {w pane p} {
 
   pack [ttk::frame $p.f2] -anchor w
   ttk::label $p.f2.l -text "Grammar type:" -width 30 -anchor w
-  ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -values {digits 1kwords 1Mwords} -state readonly
+  #ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -values {digits 1kwords 1Mwords} -state readonly
+  ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -state readonly
   pack $p.f2.l $p.f2.om -side left -padx 3
 
-  # here find a way to change the values of $p.f2.om dynamically based on the selection in $p.f1.om
-  #  set grammars [glob -directory [file join $Info(dir) asr $v(lang)] *.{lm,dfa}]
+  updateGrammars $p.f1.om $p.f2.om
 
+  # change the values of $p.f2.om dynamically based on the selection in $p.f1.om
+  bind $p.f1.om <<ComboboxSelected>> [namespace code {updateGrammars %W .props.nb.asr.f2.om}]
 
   pack [ttk::frame $p.f3] -anchor w
   ttk::label $p.f3.l -text "Transcription level:" -width 30 -anchor w
