@@ -5,6 +5,27 @@
 # This is a plugin that allows to run the Julius recognizer embedded
 # in Wavesurfer
 
+# Guidelines for Language Packs:
+# - Language packs should be stored in directories under .../plugins/asr/
+# - the directory name should match the language name
+# - the language pack must contain:
+#   - lang.conf (can be empty: the content of the file is not used at the moment)
+#   - julius.jconf (Julius configurations not already contained in the LM and AM files)
+#   - one or more set of acoustic models. Acoustic models should be stored in Julius format
+#     they must have extension .mmf and must have a corresponding model set list file with
+#     the same name and extension .lst. It is recommended that the file name gives some
+#     indication of the kind of models (e.g. number of Gaussians, feature kind, sampling freq.),
+#     example: tied_64_MFCC_0_D_A_Z-16kHz.mmf
+#   - one or more set of language models. Language models can be either n-grams (extension .lm)
+#     or regular grammars (extension .dfa). In both cases, a corresponding dictionary must be
+#     provided with equal filename and extension .dict. For regular grammars, a .term file may
+#     also be required depending on how the grammar was generated. It is recommended that the
+#     file name gives some indication on the kind of grammar (kind of words if possible, order
+#     of the number of words...), example: nst_testset_20kw.lm
+#   - full.dict: large dictionary used to generate automatically the regular grammar needed for
+#     forced alignment
+
+
 # Register plug-in with the callbacks we want to use.
 wsurf::RegisterPlugin ASR \
   -description "This plug-in adds online speech recognition support.\
@@ -49,13 +70,14 @@ namespace eval asr {
 
   set Info(OptionTable) [list \
 		-asr:lang        lang       "Swedish" \
-		-asr:grammarType grammarType "digits" \
+		-asr:grammarType grammarType "" \
 		-asr:cfg         cfg        "$Info(dir)/asr/Swedish/julius.jconf" \
 		-asr:amfn        amfn       "" \
-		-asr:mmf         mmf        "$Info(dir)/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.mmf" \
-		-asr:dic         dic        "$Info(dir)/asr/Swedish/nst_testset.dict" \
-		-asr:lst         lst        "$Info(dir)/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.lst" \
-		-asr:lm          lm         "$Info(dir)/asr/Swedish/nst_testset.lm" \
+		-asr:mmf         mmf        "" \
+		-asr:dic         dic        "" \
+		-asr:lst         lst        "" \
+		-asr:lm          lm         "" \
+		-asr:dfa          dfa         "" \
 		-asr:extraargs   extraargs  "" \
 		-asr:inspen      inspen     0.0 \
 		-asr:translevel  translevel "word" \
@@ -723,46 +745,42 @@ proc asr::drawAsrAdvancedPage {w pane p} {
     destroy $f
   }
 
-  foreach var [list cfg lm mmf lst dic extraargs inspen] {
+  foreach var [list cfg lm dic dfa mmf lst extraargs inspen] {
     set v(t,$var) $v($var)
   }
 
   fileChooserEntry $p.f1 "Config File:" [namespace current]::${pane}::var(t,cfg) .cfg
-  fileChooserEntry $p.f2 "Language Models File:" [namespace current]::${pane}::var(t,lm) .lm
-  fileChooserEntry $p.f3 "Acoustic Models File:" [namespace current]::${pane}::var(t,mmf) .mmf
-  fileChooserEntry $p.f4 "Acoustic Models List:" [namespace current]::${pane}::var(t,lst) .lst
-  fileChooserEntry $p.f5 "Dictionary File:" [namespace current]::${pane}::var(t,dic) .jdict
+  pack [ttk::frame $p.f2] -anchor w -ipady 2
+  label $p.f2.l -text "Statistical Language Models:" -anchor w -wi 30
+  pack $p.f2.l -side left -padx 3
+  fileChooserEntry $p.f3 "N-gram File (.lm):" [namespace current]::${pane}::var(t,lm) .lm
+  fileChooserEntry $p.f4 "Dictionary (.dict):" [namespace current]::${pane}::var(t,dic) .dict
+  pack [ttk::frame $p.f5] -anchor w -ipady 2
+  label $p.f5.l -text "Regular Grammar (.dfa, .dict, .term):" -anchor w -wi 30
+  pack $p.f5.l -side left -padx 3
+  fileChooserEntry $p.f6 "DFA File:" [namespace current]::${pane}::var(t,dfa) .dfa
+  fileChooserEntry $p.f7 "Acoustic Models File:" [namespace current]::${pane}::var(t,mmf) .mmf
+  fileChooserEntry $p.f8 "Acoustic Models List:" [namespace current]::${pane}::var(t,lst) .lst
     
-  pack [ttk::frame $p.f6] -anchor w -ipady 2
-  label $p.f6.l -text "Insertion Penalty" -anchor w -wi 15
-  entry $p.f6.e -textvariable [namespace current]::${pane}::var(t,inspen) -wi 10
-  pack $p.f6.l $p.f6.e -side left -padx 3
+  pack [ttk::frame $p.f10] -anchor w -ipady 2
+  label $p.f10.l -text "Insertion Penalty" -anchor w -wi 15
+  entry $p.f10.e -textvariable [namespace current]::${pane}::var(t,inspen) -wi 10
+  pack $p.f10.l $p.f10.e -side left -padx 3
 
-  pack [ttk::frame $p.f7] -anchor w -ipady 2
-  label $p.f7.l -text "Extra Arguments" -anchor w -wi 15
-  entry $p.f7.e -textvariable [namespace current]::${pane}::var(t,extraargs) -wi 25
-  pack $p.f7.l $p.f7.e -side left -padx 3
+  pack [ttk::frame $p.f11] -anchor w -ipady 2
+  label $p.f11.l -text "Extra Arguments" -anchor w -wi 15
+  entry $p.f11.e -textvariable [namespace current]::${pane}::var(t,extraargs) -wi 25
+  pack $p.f11.l $p.f11.e -side left -padx 3
 
-  pack [ttk::frame $p.f8] -anchor w -ipady 2
-  label $p.f8.l -text "Current Command:" -anchor w -wi 15
-  pack $p.f8.l -side left -padx 3
-  pack [ttk::frame $p.f9] -anchor w -ipady 2
-  text $p.f9.t -width 60 -height 4
-  $p.f9.t insert 1.0 "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input stdin -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -spsegment < $Info(tmpfile).wav" 
+  pack [ttk::frame $p.f12] -anchor w -ipady 2
+  label $p.f12.l -text "Current Command:" -anchor w -wi 15
+  pack $p.f12.l -side left -padx 3
+  pack [ttk::frame $p.f13] -anchor w -ipady 2
+  text $p.f13.t -width 60 -height 4
+  $p.f13.t insert 1.0 "$Info(asrexe) -C $v(cfg) -nosectioncheck -hlist $v(lst) -input stdin -d $v(lm) -v $v(dic) -h $v(mmf) -fallback1pass -spsegment < $Info(tmpfile).wav" 
 
-  $p.f9.t configure -state disabled
-  pack $p.f9.t -side left -padx 3
-
-#  foreach var [list onColor offColor] {
-#    set v(t,$var) $v($var)
-#  }
-
-# colorPropItem $p.f1 "Voiced segment color:" 23 \
-#     [namespace current]::${pane}::var(t,onColor)
-# colorPropItem $p.f2 "Unvoiced segment color:" 23 \
-#     [namespace current]::${pane}::var(t,offColor)
-
-
+  $p.f13.t configure -state disabled
+  pack $p.f13.t -side left -padx 3
 }
 
 
