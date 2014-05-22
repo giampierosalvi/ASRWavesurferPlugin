@@ -51,6 +51,7 @@ namespace eval asr {
 		-asr:lang        lang       "Swedish" \
 		-asr:grammarType grammarType "digits" \
 		-asr:cfg         cfg        "$Info(dir)/asr/Swedish/julius.jconf" \
+		-asr:amfn        amfn       "" \
 		-asr:mmf         mmf        "$Info(dir)/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.mmf" \
 		-asr:dic         dic        "$Info(dir)/asr/Swedish/nst_testset.dict" \
 		-asr:lst         lst        "$Info(dir)/asr/Swedish/tied_64_MFCC_0_D_A_Z-16kHz.lst" \
@@ -330,6 +331,10 @@ proc asr::_computeAsr {w pane} {
   variable Info
   upvar [namespace current]::${pane}::var v
   upvar ::wsurf::trans::${pane}::var u
+
+  # ACOUSTIC MODELS
+  set v(mmf) [file join $Info(dir) asr $v(lang) $v(amfn)]
+  set v(lst) [regsub {.mmf$} $v(mmf) {.lst}]
 
   # these are flags that are used regardless if it is forced alignment or recognition
   set commonFlags "-C $v(cfg) -nosectioncheck -hlist $v(lst) -h $v(mmf) -input rawfile -iwsp -filelist $Info(tmpfile).lst"
@@ -616,16 +621,17 @@ proc asr::fileChooserEntry {w label var ext} {
   pack $w.l $w.e $w.b -side left -padx 3
 }
 
-proc asr::updateGrammars {langcombobox gramcombobox} {
+proc asr::updateCombobox {langcombobox destcombobox extensions} {
   variable Info
 
   set lang [$langcombobox get]
-  set gramFiles [glob -directory [file join $Info(dir) asr $lang] *.{lm,dfa}]
+  set destFiles [glob -directory [file join $Info(dir) asr $lang] *.$extensions]
   set grammars {}
-  foreach gramFile $gramFiles {
-    lappend grammars [lindex [file split $gramFile] end]
+  foreach destFile $destFiles {
+    lappend destValues [lindex [file split $destFile] end]
   }
-  $gramcombobox configure -values $grammars
+  $destcombobox configure -values $destValues
+  $destcombobox set [lindex $destValues 0]
 }
 
 # This procedure draws the properties notebook-page for the "Asr" tab.
@@ -637,7 +643,7 @@ proc asr::drawAsrPage {w pane p} {
     destroy $f
   }
 
-  foreach var [list lang grammarType translevel confidenceflag forcedflag forcedext] {
+  foreach var [list lang amfn grammarType translevel confidenceflag forcedflag forcedext] {
     set v(t,$var) $v($var)
   }
 
@@ -648,24 +654,34 @@ proc asr::drawAsrPage {w pane p} {
   }
 
   pack [ttk::frame $p.f1] -anchor w
-  ttk::label $p.f1.l -text "ASR Language:" -width 30 -anchor w
-  ttk::combobox $p.f1.om -textvariable [namespace current]::${pane}::var(t,lang) -values $v(availableLanguages) -state readonly
+  ttk::label $p.f1.l -text "ASR Language:" -width 20 -anchor w
+  ttk::combobox $p.f1.om -textvariable [namespace current]::${pane}::var(t,lang) -values $v(availableLanguages) -state readonly -width 33
   pack $p.f1.l $p.f1.om -side left -padx 3
 
+  pack [ttk::frame $p.f1_5] -anchor w
+  ttk::label $p.f1_5.l -text "Acoustic Models:" -width 20 -anchor w
+  ttk::combobox $p.f1_5.om -textvariable [namespace current]::${pane}::var(t,amfn) -values $v(availableLanguages) -state readonly -width 33
+  pack $p.f1_5.l $p.f1_5.om -side left -padx 3
+
+  updateCombobox $p.f1.om $p.f1_5.om "mmf"
+  # change the values of $p.f2.om dynamically based on the selection in $p.f1.om
+  # find a way to send $p.f2.om instead of .props.nb.asr.f2.om
+  bind $p.f1.om <<ComboboxSelected>> [namespace code {updateCombobox %W .props.nb.asr.f1_5.om "mmf"}]
+
   pack [ttk::frame $p.f2] -anchor w
-  ttk::label $p.f2.l -text "Grammar type:" -width 30 -anchor w
+  ttk::label $p.f2.l -text "Grammar type:" -width 20 -anchor w
   #ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -values {digits 1kwords 1Mwords} -state readonly
-  ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -state readonly
+  ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -state readonly -width 33
   pack $p.f2.l $p.f2.om -side left -padx 3
 
-  updateGrammars $p.f1.om $p.f2.om
-
+  updateCombobox $p.f1.om $p.f2.om "\{lm,dfa\}"
   # change the values of $p.f2.om dynamically based on the selection in $p.f1.om
-  bind $p.f1.om <<ComboboxSelected>> [namespace code {updateGrammars %W .props.nb.asr.f2.om}]
+  # find a way to send $p.f2.om instead of .props.nb.asr.f2.om
+  bind $p.f1.om <<ComboboxSelected>> [namespace code {updateCombobox %W .props.nb.asr.f2.om "\{lm,dfa\}"}]
 
   pack [ttk::frame $p.f3] -anchor w
-  ttk::label $p.f3.l -text "Transcription level:" -width 30 -anchor w
-    ttk::combobox $p.f3.om -textvariable [namespace current]::${pane}::var(t,translevel) -values {word phoneme} -state readonly
+  ttk::label $p.f3.l -text "Transcription level:" -width 20 -anchor w
+    ttk::combobox $p.f3.om -textvariable [namespace current]::${pane}::var(t,translevel) -values {word phoneme} -state readonly -width 33
   pack $p.f3.l $p.f3.om -side left -padx 3
 
   pack [ttk::frame $p.f4] -anchor w
