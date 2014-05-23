@@ -617,17 +617,19 @@ proc asr::fileChooserEntry {w label var ext} {
 }
 
 # this is used to update comboboxes dynamically when the Language is changed
-proc asr::updateCombobox {langcombobox destcombobox extensions} {
+proc asr::updateComboboxes {langcombobox destExtList} {
   variable Info
 
   set lang [$langcombobox get]
-  set destFiles [glob -directory [file join $Info(dir) asr $lang] *.$extensions]
-  set grammars {}
-  foreach destFile $destFiles {
-    lappend destValues [lindex [file split $destFile] end]
+  foreach {destcombobox extensions} $destExtList {
+    set destFiles [glob -directory [file join $Info(dir) asr $lang] *.$extensions]
+    set destValues {}
+    foreach destFile $destFiles {
+      lappend destValues [lindex [file split $destFile] end]
+    }
+    $destcombobox configure -values $destValues
+    $destcombobox set [lindex $destValues 0]
   }
-  $destcombobox configure -values $destValues
-  $destcombobox set [lindex $destValues 0]
 }
 
 # This procedure draws the properties notebook-page for the "Asr" tab.
@@ -660,10 +662,10 @@ proc asr::drawAsrPage {w pane p} {
   ttk::combobox $p.f1_5.om -textvariable [namespace current]::${pane}::var(t,amfn) -values $v(availableLanguages) -state readonly -width 33
   pack $p.f1_5.l $p.f1_5.om -side left -padx 3
 
-  updateCombobox $p.f1.om $p.f1_5.om "mmf"
+  #updateCombobox $p.f1.om $p.f1_5.om "mmf"
   # change the values of $p.f2.om dynamically based on the selection in $p.f1.om
   # find a way to send $p.f2.om instead of .props.nb.asr.f2.om
-  bind $p.f1.om <<ComboboxSelected>> [namespace code {updateCombobox %W .props.nb.asr.f1_5.om "mmf"}]
+  #bind $p.f1.om <<ComboboxSelected>> [namespace code {updateCombobox %W .props.nb.asr.f1_5.om "mmf"}]
 
   pack [ttk::frame $p.f2] -anchor w
   ttk::label $p.f2.l -text "Grammar type:" -width 20 -anchor w
@@ -671,10 +673,10 @@ proc asr::drawAsrPage {w pane p} {
   ttk::combobox $p.f2.om -textvariable [namespace current]::${pane}::var(t,grammarType) -state readonly -width 33
   pack $p.f2.l $p.f2.om -side left -padx 3
 
-  updateCombobox $p.f1.om $p.f2.om "\{lm,dfa\}"
+  updateComboboxes $p.f1.om [list $p.f1_5.om "mmf" $p.f2.om "\{lm,dfa\}"]
   # change the values of $p.f2.om dynamically based on the selection in $p.f1.om
   # find a way to send $p.f2.om instead of .props.nb.asr.f2.om
-  bind $p.f1.om <<ComboboxSelected>> [namespace code {updateCombobox %W .props.nb.asr.f2.om "\{lm,dfa\}"}]
+  bind $p.f1.om <<ComboboxSelected>> [namespace code {updateComboboxes %W [list .props.nb.asr.f1_5.om "mmf" .props.nb.asr.f2.om "\{lm,dfa\}"]}]
 
   pack [ttk::frame $p.f3] -anchor w
   ttk::label $p.f3.l -text "Transcription level:" -width 20 -anchor w
