@@ -92,8 +92,11 @@ namespace eval asr {
   # first check if Julius is already installed in the system
   # tcl_platform(os): Linux, Windows NT, Darwin
   set os [lindex $::tcl_platform(os) 0]
-  set extension ""
-  if {$os=="Windows"} { set extension ".exe" }
+  switch $os {
+    "Windows" { set extension ".exe" }
+    "Darwin" { set extension ".dSYM" }
+    default { set extension "" }
+  }
   # tcl_platform(machine): x86_64, intel, x86_64
   set machine $::tcl_platform(machine)
   set Info(asrexe) [file join $Info(dir) asr julius-4.3.1_${os}_$machine$extension]
