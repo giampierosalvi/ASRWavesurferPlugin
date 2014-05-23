@@ -96,7 +96,7 @@ namespace eval asr {
   if {$os=="Windows"} { set extension ".exe" }
   # tcl_platform(machine): x86_64, intel, x86_64
   set machine $::tcl_platform(machine)
-  set Info(asrexe) "$Info(dir)/asr/julius-4.3.1_${os}_$machine$extension"
+  set Info(asrexe) [file join $Info(dir) asr julius-4.3.1_${os}_$machine$extension]
   # the next should be read from julius acoustic models. Problem is the models are
   # binary files and not easily parsed. Alternatively it can be read from julius
   # recognition output, but the problem is that it's needed before julius is run
@@ -507,33 +507,6 @@ proc asr::_drawAsr {w pane} {
   for {set i 0} {$i<$u(nLabels)} {incr i} {
     $c itemconfigure lab$i -fill $u(t1,$i,bgColor)
   }
-#  $u(drawTranscription)
-
-  # set c [$pane canvas]
-  # set height [$pane cget -scrollheight]
-  # $c delete asr
-  # set i 0
-
-  # # Frame interval is 10ms, get corresponding delta-x
-
-  # set dx [$pane getCanvasX 0.01]
-
-  # foreach val $v(pitchList) {
-  #   if {$val == 0.0} {
-  #     set color $v(offColor)
-  #   } else {
-  #     set color $v(onColor)
-  #   }
-  #   $c create rectangle [expr {$i * $dx}] 0 [expr {($i + 1) * $dx}] $height \
-  # 	-fill $color -outline "" -tags [list asr]
-  #   incr i
-  # }
-  # $c lower asr
-  # $c create text 0 0 -text "This is a recognition plugin" -anchor nw
-
-  # We have now rendered plug-in specific stuff in this pane.
-  # Remember that this plug-in will handle this pane from now on.
-
   set v(drawAsr) 1
 }
 
@@ -598,10 +571,10 @@ proc asr::propertyPane {w pane} {
   
   if {$pane==""} return
   if {$v(drawAsr)} {
-    return [list "ASR" [namespace code drawAsrPage] "ASR Adv" [namespace code drawAsrAdvancedPage]]
+    return [list "ASR" [namespace code drawAsrPage]]
+#    return [list "ASR" [namespace code drawAsrPage] "ASR Adv" [namespace code drawAsrAdvancedPage]]
   }
 }
-
 
 # This procedure is called when the user clicks "OK" or "Apply" in the 
 # "Asr" notebook-page.
@@ -643,6 +616,7 @@ proc asr::fileChooserEntry {w label var ext} {
   pack $w.l $w.e $w.b -side left -padx 3
 }
 
+# this is used to update comboboxes dynamically when the Language is changed
 proc asr::updateCombobox {langcombobox destcombobox extensions} {
   variable Info
 
@@ -665,7 +639,8 @@ proc asr::drawAsrPage {w pane p} {
     destroy $f
   }
 
-  foreach var [list lang amfn grammarType translevel confidenceflag forcedflag forcedext] {
+  #foreach var [list lang amfn grammarType translevel confidenceflag forcedflag forcedext]
+  foreach {option var default} $Info(OptionTable) {
     set v(t,$var) $v($var)
   }
 
