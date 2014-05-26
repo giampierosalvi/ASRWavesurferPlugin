@@ -1,0 +1,11 @@
+All platforms:
+- install WaveSurfer from http://sourceforge.net/projects/wavesurfer/
+- run WaveSurfer once (in order to create the preference directory)
+- close WaveSurfer
+
+Linux and Mac OS X:
+- extract package files into ~/.wavesurfer/1.8/plugins/
+tar xvfz asrwavesurferplugin_<version>.tgz
+
+Windows:
+- extract package files into ${HOME}\.wavesurfer\1.8\plugins\
