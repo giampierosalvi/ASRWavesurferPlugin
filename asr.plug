@@ -304,12 +304,26 @@ proc asr::getJuliusParameters {juliusOutput} {
   return [array get faParams]
 }
 
+# removes comments and other problematic aspects of dictionaries
+# tested with a special version of the cmu dictionary available for English
+# in the future more formats will be supported
+proc asr::cleanDictionary { dictlines } {
+  set cleandict {}
+  foreach line $dictlines {
+    if {[regexp {^\\\;\;\;} $line] } { continue }
+    lappend cleandict [regsub -all {\(1\)} $line {}]
+  }
+  return $cleandict
+}
+
 # note that this ignores lines that don't fit the format specified by the regexp
 proc asr::readDictionary { filename } {
   set dictionary [dict create]
   set fh [open $filename]
-  foreach line [split [read $fh] \n] {
-    set res [regexp -all {^([^\t]*)[\s\t]*(\[.*\])?[\s\t]*([^\s].*[^\s])[\s]*$} $line all word dummy pron]
+  set cleandict [cleanDictionary [split [read $fh] \n]]
+  close $fh
+  foreach line $cleandict {
+    set res [regexp -all {^([^\s\t]*)[\s\t]*(\[.*\])?[\s\t]*([^\s].*[^\s])[\s]*$} $line all word dummy pron]
     if { ! $res } { continue }
     dict lappend dictionary $word $pron
   }
@@ -327,7 +341,7 @@ proc asr::TranscriptionToJuliusGrammar {tran fulldict} {
   # generate dictionary
   foreach word $tran {
     if { ! [dict exists $fulldict $word] } {
-      return "missing word $word"
+      error "missing word $word"
     }
     foreach pron [dict get $fulldict $word] {
       set dict "$dict$wid \[$word\] $pron\n"
@@ -401,8 +415,11 @@ proc asr::_computeAsr {w pane} {
     set fi [open $ortFileName "r"]
     set tran [regexp -all -inline {\S+} [string trim [read $fi]]]
     close $fi
-    set fulldict [readDictionary ~/.wavesurfer/1.8/plugins/asr/Swedish/htk.dic]
-    array set fagram [TranscriptionToJuliusGrammar $tran $fulldict]
+    # read full dictionary if necessary
+    if {! [info exists v($v(lang),fulldict)] } {
+      set v($v(lang),fulldict) [readDictionary [file join $Info(dir) asr $v(lang) full.dic]]
+    }
+    array set fagram [TranscriptionToJuliusGrammar $tran $v($v(lang),fulldict)]
     set fo [open $Info(tmpfile).dict "w"]
     puts $fo $fagram(dict)
     close $fo
