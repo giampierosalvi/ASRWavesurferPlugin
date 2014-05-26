@@ -99,7 +99,7 @@ namespace eval asr {
   }
   # tcl_platform(machine): x86_64, intel, x86_64
   set machine $::tcl_platform(machine)
-  set Info(asrexe) [file join $Info(dir) asr julius-4.3.1_${os}_$machine$extension]
+  set Info(asrexe) [file join $Info(dir) asr bin julius-4.3.1_${os}_$machine$extension]
   # the next should be read from julius acoustic models. Problem is the models are
   # binary files and not easily parsed. Alternatively it can be read from julius
   # recognition output, but the problem is that it's needed before julius is run
