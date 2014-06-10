@@ -9,7 +9,7 @@
 # - Language packs should be stored in directories under .../plugins/asr/
 # - the directory name should match the language name
 # - the language pack must contain:
-#   - lang.conf (can be empty: the content of the file is not used at the moment)
+#   - lang.conf (should contain the credits for the language pack, including eventual licenses)
 #   - julius.jconf (Julius configurations not already contained in the LM and AM files)
 #   - one or more set of acoustic models. Acoustic models should be stored in Julius format
 #     they must have extension .mmf and must have a corresponding model set list file with
@@ -87,6 +87,8 @@ namespace eval asr {
 		   ]
 
   set Info(tmpfile) [file join [util::tmpdir] asrtmp.[pid]]
+
+  set Info(credits) "Wavesurfer ASR Plugin\n\n(c) 2012-2014 Giampiero Salvi <giampi@kth.se>\n\nContributors:\nNiklas Vanhainen\n\nFor more information consult:\nSalvi, G., & Vanhainen, N. (2014). The WaveSurfer Automatic Speech Recognition Plugin. In Proceedings of LREC. Reykjavik, Iceland.\n"
 
   # find Julius executable. At the moment only locally stored exe files are considered, in the future,
   # first check if Julius is already installed in the system
@@ -657,6 +659,8 @@ proc asr::drawAsrPage {w pane p} {
   variable Info
   upvar [namespace current]::${pane}::var v
 
+  set credits ""
+
   foreach f [winfo children $p] {
     destroy $f
   }
@@ -666,11 +670,18 @@ proc asr::drawAsrPage {w pane p} {
     set v(t,$var) $v($var)
   }
 
-  set languageDirs [glob -directory [file join $Info(dir) asr] [file join * lang.conf]]
+  set languageConfFiles [glob -directory [file join $Info(dir) asr] [file join * lang.conf]]
   set v(availableLanguages) {}
-  foreach langdir $languageDirs {
-    lappend v(availableLanguages) [lindex [file split $langdir] end-1]
+  foreach langConfFile $languageConfFiles {
+    set langName [lindex [file split $langConfFile] end-1]
+    lappend v(availableLanguages) $langName
+    set fh [open $langConfFile "r"]
+    set langcredits [read $fh]
+    close $fh
+    set credits "$credits\nCredits for $langName language pack\n\n$langcredits\n"
   }
+
+  #puts $credits
 
   pack [ttk::frame $p.f1] -anchor w
   ttk::label $p.f1.l -text "ASR Language:" -width 20 -anchor w
@@ -721,6 +732,11 @@ proc asr::drawAsrPage {w pane p} {
   pack $p.f7.l $p.f7.om -side left -padx 3
 
   pack [ttk::separator $p.f6sep -orient horizontal] -anchor w -fill x
+
+  pack [ttk::frame $p.f8] -anchor w
+  ttk::button $p.f8.b1 -text Credits -command [list tk_messageBox -title "About ASR Plugin" -message $Info(credits) -detail $credits]
+  pack $p.f8.b1 -side left -padx 3
+
 
 #  foreach var [list onColor offColor] {
 #    set v(t,$var) $v($var)
