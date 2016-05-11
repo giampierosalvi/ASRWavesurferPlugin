@@ -680,13 +680,16 @@ proc asr::drawAsrPage {w pane p} {
     close $fh
     set credits "$credits\nCredits for $langName language pack\n\n$langcredits\n"
   }
-  puts "number of available languages:"
-  puts [llength $v(availableLanguages)]
   if [llength $v(availableLanguages)]==0 {
       tk_messageBox -title "Missing Language Packs" -message "At least one language pack muse be installed. Check http://www.speech.kth.se/asr/ for more details"
     return
   }
-  #puts $credits
+  # if current language no longer in the list, switch to first in list
+  if [lsearch -exact $v(availableLanguages) $v(t,lang)]==-1 {
+    set firstlang [lindex $v(availableLanguages) 0]
+    set v(t,lang) $firstlang
+    set v(t,cfg) "$Info(dir)/asr/$firstlang/julius.jconf"
+  }
 
   pack [ttk::frame $p.f1] -anchor w
   ttk::label $p.f1.l -text "ASR Language:" -width 20 -anchor w
