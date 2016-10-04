@@ -337,9 +337,9 @@ proc asr::readDictionary { filename } {
 
 proc asr::TranscriptionToJuliusGrammar {tran fulldict} {
   set tran "<s> [string toupper $tran] </s>"
-  set dict ""
+  set dict "0 \[sil\] sil\n"
   set gram ""
-  set wid 0
+  set wid 1
   # generate dictionary
   foreach word $tran {
     if { ! [dict exists $fulldict $word] } {
@@ -353,11 +353,13 @@ proc asr::TranscriptionToJuliusGrammar {tran fulldict} {
   # generate grammar
   set nodei 0
   set tranlen [llength $tran]
-  for {set i [expr $tranlen-1]} {$i>=0} {incr i -1} {
+  set islastnode 1
+  for {set wordidx [expr $tranlen]} {$wordidx>0} {incr wordidx -1} {
     set nextnodei [expr $nodei+1]
-    set islastnode [expr $i == $tranlen]
-    set gram "$gram$nodei $i $nextnodei 0 $islastnode\n"
+    set gram "$gram$nodei $wordidx $nextnodei 0 $islastnode\n"
+    set gram "$gram$nextnodei 0 $nextnodei 0 $islastnode\n"
     incr nodei
+    set islastnode 0
   }
   set gram "$gram$nodei -1 -1 1 0\n"
 
