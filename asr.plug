@@ -38,8 +38,8 @@ wsurf::RegisterPlugin ASR \
   Salvi, G., & Vanhainen, N. (2014). \"The WaveSurfer Automatic Speech\
   Recognition Plugin\" in Proceedings of LREC. Reykjavik, Iceland.\
   \n\
-  More information and updated versions of the plugin at http://speech.kth.se/asr/." \
-    -url "http://speech.kth.se/~giampi/" \
+  More information and updated versions of the plugin at http://www.speech.kth.se/asr/." \
+    -url "http://www.speech.kth.se/~giampi/" \
     -addmenuentriesproc   asr::addMenuEntries \
     -panecreatedproc      asr::paneCreated \
     -panedeletedproc      asr::paneDeleted \
@@ -135,6 +135,7 @@ proc asr::paneCreated {w pane} {
  }
  upvar [namespace current]::${pane}::var v
  set v(drawAsr) 0
+
 }
 
 
@@ -175,7 +176,7 @@ proc asr::createAsr {w pane} {
   puts "createAsr: exit pane=$pane"
 
   upvar ::wsurf::trans::${pane}::var u
-  set u(format) "Wavesurfer"
+  set u(format) "WaveSurfer"
   set u(labext) "rec"
 
   addAsrStuff $w $pane
