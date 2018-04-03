@@ -3,9 +3,12 @@ ASRWavesurferPlugin
 
 Automatic Speech Recognition Plugin for Wavesurfer
 
+## Reference
 **The WaveSurfer Automatic Speech Recognition Plugin**  
 *Giampiero Salvi and Niklas Vanhainen*  
 Proceedings of the Ninth International Conference on Language Resources and Evaluation (LREC'14), May 2014, Reykjavik, Iceland.
+
+## Additional Resources
 
 You can find the acoustic and language models required for the plugin to work at this address:
 
