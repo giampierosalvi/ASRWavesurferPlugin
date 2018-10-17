@@ -34,3 +34,4 @@ tar xvfz wavesurfer_asr_plugin_English_models_0.1.tgz -C ~/.wavesurfer/1.8/plugi
 ### Installation MS Windows:
 * unpack `v1.0.2.tar.gz` into `${HOME}\.wavesurfer\1.8\plugins\`
 * unpack at least one of the language packs into `${HOME}\.wavesurfer\1.8\plugins\asr\`
+Where `${HOME}` is usually under `C:\Users\<username>`
